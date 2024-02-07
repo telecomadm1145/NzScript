@@ -1,13 +1,80 @@
 #pragma once
 #include "ScriptGC.h"
-
-
-struct Variant;
+struct Variant {
+	using ScriptInternMethod = struct Variant (*)(class ScriptContext&, std::vector<struct Variant>&);
+	Variant() = default;
+	Variant(int value) : Type(DataType::Int), Int(value) {}
+	Variant(long value) : Type(DataType::Int), Int(value) {}
+	Variant(long long value) : Type(DataType::Long), Long(value) {}
+	Variant(float value) : Type(DataType::Float), Float(value) {}
+	Variant(double value) : Type(DataType::Double), Double(value) {}
+	Variant(GC& gc, const char* value) : Type(DataType::String) {
+		Object = new GCString(gc, value);
+	}
+	// Variant(Variant* value) : Type(DataType::VariantPtr), VariantPtr(value) {}
+	union {
+		int Int;
+		long long Long = 0;
+		float Float;
+		double Double;
+		GCObject* Object;
+		ScriptInternMethod InternMethod;
+		// Variant* VariantPtr;
+	};
+	enum class DataType {
+		Null,
+		Int,
+		Long,
+		Float,
+		Double,
+		IUnk_NotUsed,
+		IDisp_NotUsed,
+		Object,
+		Array_NotUsed,
+		Method_NotUsed,
+		InternMethod,
+		String,
+		VariantPtr_NotUsed,
+	} Type;
+	std::string ToString() {
+		switch (Type) {
+		case DataType::Null:
+			return "Null";
+		case DataType::Int:
+			return std::to_string(Int);
+		case DataType::Long:
+			return std::to_string(Long);
+		case DataType::Float:
+			return std::to_string(Float);
+		case DataType::Double:
+			return std::to_string(Double);
+		case DataType::Object:
+			return "{Script Object}";
+		case DataType::InternMethod:
+			return "{Internal Method}";
+		case DataType::String: 
+			return ((GCString*)Object)->Pointer;
+		default:
+			return "Unknown";
+		}
+	}
+	operator bool() {
+		if (Type == DataType::Null)
+			return false;
+		if (Type == DataType::Int || Type == DataType::Float)
+			return Int ? 1 : 0;
+		return Long ? 1 : 0;
+	}
+};
 class ScriptObject : public GCObject {
 public:
 	ScriptObject(GC& gc) : GCObject(gc) {
 	}
+
+private:
 	std::unordered_map<std::string, Variant> Fields;
+
+public:
 	const std::type_info& GetType() const noexcept override {
 		return typeid(ScriptObject);
 	}
@@ -39,93 +106,30 @@ namespace AST {
 		}
 	};
 }
+using ScriptMethod = AST::ScriptMethod;
 class ScriptArray : public ScriptObject {
+private:
+	std::vector<Variant> Variants;
+
 public:
-	std::vector<class Variant*> Variants;
 	ScriptArray(GC& gc) : ScriptObject(gc) {
 	}
 	const std::type_info& GetType() const noexcept override {
 		return typeid(ScriptArray);
 	}
-};
-using ScriptMethod = AST::ScriptMethod;
-struct Variant {
-	using ScriptInternMethod = struct Variant (*)(class ScriptContext&, std::vector<struct Variant>&);
-	Variant() = default;
-	Variant(int value) : Type(DataType::Int), Int(value) {}
-	Variant(long value) : Type(DataType::Int), Int(value) {}
-	Variant(long long value) : Type(DataType::Long), Long(value) {}
-	Variant(float value) : Type(DataType::Float), Float(value) {}
-	Variant(double value) : Type(DataType::Double), Double(value) {}
-	Variant(const char* value) : Type(DataType::String), String(_strdup(value)) {}
-	Variant(Variant* value) : Type(DataType::VariantPtr), VariantPtr(value) {}
-	union {
-		int Int;
-		long long Long = 0;
-		float Float;
-		double Double;
-		ScriptObject* Object;
-		char* String;
-		ScriptInternMethod InternMethod;
-		Variant* VariantPtr;
-	};
-	enum class DataType {
-		Null,
-		Int,
-		Long,
-		Float,
-		Double,
-		IUnk,
-		IDisp,
-		Object,
-		Array,
-		Method,
-		InternMethod,
-		String,
-		VariantPtr,
-	} Type;
-	std::string ToString() {
-		switch (Type) {
-		case DataType::Null:
-			return "Null";
-		case DataType::Int:
-			return std::to_string(Int);
-		case DataType::Long:
-			return std::to_string(Long);
-		case DataType::Float:
-			return std::to_string(Float);
-		case DataType::Double:
-			return std::to_string(Double);
-		case DataType::Object:
-			using std::operator""s;
-			return "{"s + Object->GetType().name() + "}"s;
-		case DataType::InternMethod:
-			return "{Internal Method}";
-		case DataType::String:
-			return String;
-		default:
-			return "Unknown";
+	void Set(size_t index, Variant v) {
+		auto& v2 = Variants[index];
+		if (v2.Type == Variant::DataType::Object) {
+			RemoveRef(v2.Object);
 		}
-	}
-	~Variant() {
-		if (Type == DataType::String) {
-			if (String == 0) {
-				free(String);
-				String = 0;
-			}
+		if (v.Type == Variant::DataType::Object) {
+			AddRef(v.Object);
 		}
+		Variants[index] = v;
+		return;
 	}
-	operator bool() {
-		if (Type == DataType::Null)
-			return false;
-		if (Type == DataType::Int || Type == DataType::Float)
-			return Int ? 1 : 0;
-		return Long ? 1 : 0;
-	}
-	Variant& Deref() {
-		if (Type == DataType::VariantPtr)
-			return *VariantPtr;
-		return *this;
+	Variant Get(size_t index) {
+		return Variants[index];
 	}
 };
 template <class T>
@@ -144,7 +148,10 @@ int script_cast(Variant v) {
 	case Variant::DataType::Long:
 		return v.Int;
 	case Variant::DataType::String:
-		return std::atoi(v.String);
+		if (v.Object->GetType() == typeid(GCString)) {
+			return std::atoi(((GCString*)v.Object)->Pointer);
+		}
+		break;
 	}
 	throw std::exception("Cannot convert.");
 }
@@ -160,7 +167,10 @@ long long script_cast(Variant v) {
 	case Variant::DataType::Long:
 		return v.Long;
 	case Variant::DataType::String:
-		return std::atoll(v.String);
+		if (v.Object->GetType() == typeid(GCString)) {
+			return std::atoll(((GCString*)v.Object)->Pointer);
+		}
+		break;
 	}
 	throw std::exception("Cannot convert.");
 }
@@ -176,7 +186,10 @@ float script_cast(Variant v) {
 	case Variant::DataType::Long:
 		return v.Long;
 	case Variant::DataType::String:
-		return std::atof(v.String);
+		if (v.Object->GetType() == typeid(GCString)) {
+			return std::atof(((GCString*)v.Object)->Pointer);
+		}
+		break;
 	}
 	throw std::exception("Cannot convert.");
 }
@@ -192,7 +205,10 @@ double script_cast(Variant v) {
 	case Variant::DataType::Long:
 		return v.Long;
 	case Variant::DataType::String:
-		return std::atof(v.String);
+		if (v.Object->GetType() == typeid(GCString)) {
+			return std::atof(((GCString*)v.Object)->Pointer);
+		}
+		break;
 	}
 	throw std::exception("Cannot convert.");
 }

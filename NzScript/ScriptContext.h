@@ -20,6 +20,7 @@ public:
 		Continue,
 	};
 	ScriptStatus Status;
+	GC gc;
 	ScriptContext() {
 		InternalConstants["null"] = {};
 		InternalConstants["false"] = Variant{ 0 };
@@ -56,12 +57,26 @@ public:
 		InternalConstants[name] = v;
 	}
 	void SetGlobalVar(std::string name, Variant v) {
-		if (InternalConstants.find(name) == InternalConstants.end())
-			GlobalVars[name] = v;
+		if (InternalConstants.find(name) == InternalConstants.end()) // Constants are not allowed to be modified OwO
+		{
+			auto& v2 = GlobalVars[name];
+			if (v2.Type == Variant::DataType::Object || v2.Type == Variant::DataType::String)
+				gc.RemoveRoot(v2.Object);
+			if (v.Type == Variant::DataType::Object || v.Type == Variant::DataType::String)
+				gc.AddRoot(v.Object);
+			v2 = v;
+		}
 	}
 	void SetFunctionVar(std::string name, Variant v) {
-		if (InternalConstants.find(name) == InternalConstants.end())
-			FunctionStack.top().Variants[name] = v;
+		auto& topFrame = FunctionStack.top();
+		if (InternalConstants.find(name) == InternalConstants.end()) {
+			auto& v2 = topFrame.Variants[name];
+			if (v2.Type == Variant::DataType::Object || v2.Type == Variant::DataType::String)
+				gc.RemoveRoot(v2.Object);
+			if (v.Type == Variant::DataType::Object || v.Type == Variant::DataType::String)
+				gc.AddRoot(v.Object);
+			v2 = v;
+		}
 	}
 	void DoReturn(Variant res) {
 		Status = ScriptStatus::Return;
@@ -83,6 +98,12 @@ public:
 		return Status == ScriptStatus::Normal;
 	}
 	void PopFrame() {
+		auto& topFrame = FunctionStack.top();
+		for (auto v : topFrame.Variants) {
+			if (v.second.Type == Variant::DataType::Object || v.second.Type == Variant::DataType::String) {
+				gc.RemoveRoot(v.second.Object);
+			}
+		}
 		FunctionStack.pop();
 	}
 };

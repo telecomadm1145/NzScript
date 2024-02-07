@@ -45,17 +45,14 @@ namespace AST {
 		virtual std::string GetVariableName() {
 			throw std::exception("Invalid operation.");
 		}
-		Variant Eval2(ScriptContext& ctx) {
-			return Eval(ctx).Deref();
-		}
 	};
 	class LambdaExpression : public Expression {
 	public:
 		Variant Eval(ScriptContext& ctx) override {
 			Variant v{};
-			v.Type = Variant::DataType::Method;
-			auto mtd = new ScriptMethod(Params, Statements);
-			v.Method = mtd;
+			v.Type = Variant::DataType::Object;
+			auto mtd = new ScriptMethod(ctx.gc, Params, Statements);
+			v.Object = mtd;
 			return v;
 		}
 		std::vector<std::string> Params;
@@ -86,11 +83,8 @@ namespace AST {
 		std::string str;
 
 		// Í¨¹ý Expression ¼Ì³Ð
-		Variant Eval(ScriptContext&) override {
-			Variant var;
-			var.Type = Variant::DataType::String;
-			var.String = str.data();
-			return var;
+		Variant Eval(ScriptContext& ctx) override {
+			return { ctx.gc, str.data() };
 		}
 
 		StringExpression(const std::string& str)
@@ -160,19 +154,27 @@ namespace AST {
 		Expression* leftExpression_;
 		Expression* rightExpression_;
 		BinOp op;
+		virtual bool IsLeftValue() {
+			return op == BinOp::Member;
+		}
+		virtual void Set(ScriptContext& ctx, Variant v) {
+			auto l = leftExpression_->Eval(ctx);
+			auto r = rightExpression_->GetVariableName();
+			if (l.Type == Variant::DataType::Object)
+			{
+				((ScriptObject*)l.Object)->Set(r, v);
+			}
+		}
 		Variant Eval(ScriptContext& ctx) override {
 			switch (op) {
 			case AST::BinOp::Nop:
-				return leftExpression_->Eval2(ctx);
+				return leftExpression_->Eval(ctx);
 				break;
 			case AST::BinOp::Add: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
-					Variant v{};
-					v.Type = Variant::DataType::String;
-					v.String = _strdup((lft.ToString() + rht.ToString()).c_str());
-					return v;
+					return { ctx.gc, (lft.ToString() + rht.ToString()).c_str() };
 				}
 				if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
 					return Variant{
@@ -198,8 +200,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::Sub: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
 					return Variant{
 						script_cast<double>(lft) - script_cast<double>(rht)
@@ -224,8 +226,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::Mul: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
 					return Variant{
 						script_cast<double>(lft) * script_cast<double>(rht)
@@ -250,8 +252,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::Div: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
 					return Variant{
 						script_cast<double>(lft) / script_cast<double>(rht)
@@ -276,35 +278,21 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::Mov: {
-				auto val = leftExpression_->Eval(ctx);
-				if (val.Type == Variant::DataType::VariantPtr) {
-					auto v3 = rightExpression_->Eval2(ctx);
-					*val.VariantPtr = v3;
-					return v3;
-				}
 				if (!leftExpression_->IsLeftValue()) {
 					throw std::exception("");
 				}
-				Variant v = rightExpression_->Eval2(ctx);
+				Variant v = rightExpression_->Eval(ctx);
 				leftExpression_->Set(ctx, v);
 				return v;
 			} break;
 			case AST::BinOp::Member: {
-				auto l = leftExpression_->Eval2(ctx);
+				auto l = leftExpression_->Eval(ctx);
 				auto r = rightExpression_->GetVariableName();
 				switch (l.Type) {
 				case Variant::DataType::Object: {
-					auto& v = l.Object->Fields[r];
-					Variant v2{};
-					v2.Type = Variant::DataType::VariantPtr;
-					v2.VariantPtr = &v;
-					return v2;
-				} break;
-				case Variant::DataType::Array: { // Builtin Array functions
-					if (r == "size") {
-						return (long long)l.Array->Real.size();
+					if (l.Object->GetType() == typeid(ScriptObject)) {
+						return ((ScriptObject*)l.Object)->Get(r);
 					}
-					return {};
 				} break;
 				default:
 					break;
@@ -312,8 +300,8 @@ namespace AST {
 				throw std::exception("Left is not Object.");
 			} break;
 			case AST::BinOp::Band: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
 					return Variant{
 						script_cast<long long>(lft) & script_cast<long long>(rht)
@@ -328,8 +316,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::Bor: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
 					return Variant{
 						script_cast<long long>(lft) | script_cast<long long>(rht)
@@ -344,8 +332,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::Xor: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
 					return Variant{
 						script_cast<long long>(lft) ^ script_cast<long long>(rht)
@@ -360,26 +348,26 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::And: {
-				auto lft = leftExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
 				if (!lft)
 					return Variant{ 0 };
-				auto rht = rightExpression_->Eval2(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (rht)
 					return Variant{ 1 };
 				return Variant{ 0 };
 			} break;
 			case AST::BinOp::Or: {
-				auto lft = leftExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
 				if (lft)
 					return Variant{ 1 };
-				auto rht = rightExpression_->Eval2(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (rht)
 					return Variant{ 1 };
 				return Variant{ 0 };
 			} break;
 			case AST::BinOp::Greater: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
 					return lft.ToString() > rht.ToString();
 				}
@@ -407,8 +395,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::Lesser: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
 					return lft.ToString() < rht.ToString();
 				}
@@ -436,8 +424,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::GreaterOrEqual: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
 					return lft.ToString() >= rht.ToString();
 				}
@@ -465,8 +453,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::LesserOrEqual: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
 					return lft.ToString() <= rht.ToString();
 				}
@@ -494,8 +482,8 @@ namespace AST {
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			case AST::BinOp::IsEqual: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
 					return lft.ToString() == rht.ToString();
 				}
@@ -519,12 +507,11 @@ namespace AST {
 						script_cast<int>(lft) == script_cast<int>(rht)
 					};
 				}
-
-				throw std::exception("Cannot promote a fit type.");
+				return lft.Type == rht.Type && lft.Long == rht.Long;
 			} break;
 			case AST::BinOp::NotEqual: {
-				auto lft = leftExpression_->Eval2(ctx);
-				auto rht = rightExpression_->Eval2(ctx);
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
 				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
 					return lft.ToString() != rht.ToString();
 				}
@@ -581,53 +568,10 @@ namespace AST {
 		Expression* leftExpression_;
 		Expression* rightExpression_;
 		Variant Eval(ScriptContext& ctx) override {
-			auto lft = leftExpression_->Eval2(ctx);
-			auto rht = rightExpression_->Eval2(ctx);
-			switch (lft.Type) {
-			case Variant::DataType::String: {
-				if (lft.String == nullptr)
-					return Variant{};
-				if (rht.Type == Variant::DataType::Int) {
-					if (rht.Int < 0)
-						rht.Int += strlen(lft.String);
-					if (rht.Int < 0)
-						throw std::exception("Invalid backward index.");
-					return lft.String[rht.Int];
-				}
-				else if (rht.Type == Variant::DataType::Long) {
-					if (rht.Long < 0)
-						rht.Long += strlen(lft.String);
-					if (rht.Long < 0)
-						throw std::exception("Invalid backward index.");
-					return lft.String[rht.Long];
-				}
-				throw std::exception("");
-			}
-			case Variant::DataType::Array: {
-				if (lft.Array == nullptr)
-					return Variant{};
-				if (rht.Type == Variant::DataType::Int) {
-					if (rht.Int < 0)
-						rht.Int += lft.Array->Real.size();
-					if (rht.Int < 0)
-						throw std::exception("Invalid backward index.");
-					if (rht.Int >= lft.Array->Real.size())
-						lft.Array->Real.resize(rht.Int + 1, {});
-					return &lft.Array->Real[rht.Int];
-				}
-				else if (rht.Type == Variant::DataType::Long) {
-					if (rht.Long < 0)
-						rht.Long += lft.Array->Real.size();
-					if (rht.Long < 0)
-						throw std::exception("Invalid backward index.");
-					if (rht.Long >= lft.Array->Real.size())
-						lft.Array->Real.resize(rht.Long + 1, {});
-					return &lft.Array->Real[rht.Long];
-				}
-				throw std::exception("");
-			}
-			}
-			throw std::exception("");
+			auto lft = leftExpression_->Eval(ctx);
+			auto rht = rightExpression_->Eval(ctx);
+
+			throw std::exception("Cannot index.");
 			return {};
 		}
 	};
@@ -647,11 +591,11 @@ namespace AST {
 		Expression* onTrue;
 		Expression* onFalse;
 		Variant Eval(ScriptContext& ctx) override {
-			if (condition->Eval2(ctx)) {
-				return onTrue->Eval2(ctx);
+			if (condition->Eval(ctx)) {
+				return onTrue->Eval(ctx);
 			}
 			else {
-				return onFalse->Eval2(ctx);
+				return onFalse->Eval(ctx);
 			}
 		}
 	};
@@ -662,21 +606,21 @@ namespace AST {
 		Expression* method;
 		std::vector<Expression*> arguments;
 		Variant Eval(ScriptContext& ctx) override {
-			auto left = method->Eval2(ctx);
+			auto left = method->Eval(ctx);
 			if (left.Type == Variant::DataType::Null)
 				throw std::exception("Call on a null object.");
 			auto vars = std::vector<Variant>();
 			for (auto exp : arguments) {
-				vars.push_back(exp->Eval2(ctx));
+				vars.push_back(exp->Eval(ctx));
 			}
 			if (left.Type == Variant::DataType::InternMethod) {
 				return left.InternMethod(ctx, vars);
 			}
-			if (left.Type == Variant::DataType::Method) {
-				auto mtd = left.Method;
+			if (left.Type == Variant::DataType::Object && left.Object->GetType() == typeid(ScriptMethod)) {
+				auto mtd = (ScriptMethod*)left.Object;
 				ctx.PushFrame("ScriptMethod");
 				ctx.SetFunctionVar("_this", left);
-				for (size_t i = 0; i < min(mtd->Args.size(), vars.size()); i++) {
+				for (size_t i = 0; i < std::min(mtd->Args.size(), vars.size()); i++) {
 					ctx.SetFunctionVar(mtd->Args[i], vars[i]);
 				}
 				for (auto s : mtd->Statements) {
@@ -719,12 +663,12 @@ namespace AST {
 		Variant Eval(ScriptContext& ctx) override {
 			switch (op) {
 			case AST::UnOp::Nop:
-				return left->Eval2(ctx);
+				return left->Eval(ctx);
 			case AST::UnOp::Not: {
-				return !left->Eval2(ctx);
+				return !left->Eval(ctx);
 			} break;
 			case AST::UnOp::Bnot: {
-				auto v = left->Eval2(ctx);
+				auto v = left->Eval(ctx);
 				if (v.Type == Variant::DataType::Int) {
 					return ~(v.Int);
 				}
@@ -734,7 +678,7 @@ namespace AST {
 				throw std::exception("Bad input.");
 			} break;
 			case AST::UnOp::Negative: {
-				auto v = left->Eval2(ctx);
+				auto v = left->Eval(ctx);
 				if (v.Type == Variant::DataType::Double) {
 					return -(v.Double);
 				}
@@ -750,7 +694,7 @@ namespace AST {
 				throw std::exception("Bad input.");
 			} break;
 			case AST::UnOp::Positive: {
-				auto v = left->Eval2(ctx);
+				auto v = left->Eval(ctx);
 				if (v.Type == Variant::DataType::Double) {
 					return +(v.Double);
 				}
@@ -826,7 +770,7 @@ namespace AST {
 			return elseStatement_;
 		}
 		void Execute(ScriptContext& ctx) override {
-			if (condition_->Eval2(ctx)) {
+			if (condition_->Eval(ctx)) {
 				if (thenStatement_ != nullptr)
 					thenStatement_->Execute(ctx);
 			}
@@ -851,7 +795,7 @@ namespace AST {
 		}
 
 		void Execute(ScriptContext& ctx) override {
-			while (condition_->Eval2(ctx)) {
+			while (condition_->Eval(ctx)) {
 				Statements->Execute(ctx);
 				if (ctx.Status == ScriptContext::ScriptStatus::Break) {
 					ctx.ResetStatus();
@@ -908,7 +852,7 @@ namespace AST {
 			return expression_;
 		}
 		void Execute(ScriptContext& ctx) override {
-			auto str = expression_->Eval2(ctx).ToString();
+			auto str = expression_->Eval(ctx).ToString();
 			throw std::exception(str.c_str());
 		}
 
@@ -1085,7 +1029,7 @@ private:
 			return new AST::NumberExpression(v);
 		}
 		else if (match(Lexer::TokenType::IntegerLiteral)) {
-			unsigned long long value = std::stol(tokens_[position_ - 1].lexeme.data());
+			unsigned long long value = std::stoll(tokens_[position_ - 1].lexeme.data());
 			Variant v{};
 			v.Type = Variant::DataType::Long;
 			v.Long = value;
@@ -1210,6 +1154,11 @@ private:
 				left = new AST::IndexExpression{ left, index };
 			}
 			else if (match(Lexer::TokenType::Operator, "=")) {
+				if (getOperatorPrecedence(AST::BinOp::Mov) <= precedence)
+				{
+					position_--;
+					break;
+				}
 				auto right = parseExpression();
 				if (right == nullptr) {
 					throw std::exception("Expect expression on right.");

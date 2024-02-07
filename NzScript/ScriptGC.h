@@ -1,6 +1,7 @@
 #include <mutex>
 #include <unordered_set>
 #include <unordered_map>
+#include <iostream>
 /// <summary>
 /// GC 对象
 /// </summary>
@@ -20,24 +21,40 @@ public:
 		References.erase(ref);
 	}
 };
+class GCString : public GCObject {
+public:
+	char* Pointer;
+	GCString(GC& gc, const char* s) : Pointer(_strdup(s)), GCObject(gc) {}
+	virtual const std::type_info& GetType() const noexcept {
+		return typeid(GCString);
+	}
+	~GCString() {
+		free(Pointer);
+	}
+};
 /// <summary>
 /// GC 上下文类
 /// </summary>
 class GC {
 	std::mutex _lock;
 	std::unordered_set<GCObject*> Objects;
-	std::unordered_set<GCObject*> Roots;
+	std::unordered_map<GCObject*, int> Roots;
 
 public:
+	size_t ObjectCount() {
+		return Objects.size();
+	}
 	void AddRoot(GCObject* obj) {
 		std::lock_guard<std::mutex> lock(_lock);
-		Roots.insert(obj);
+		Roots[obj]++;
 		Objects.insert(obj);
 	}
 
 	void RemoveRoot(GCObject* obj) {
 		std::lock_guard<std::mutex> lock(_lock);
-		Roots.erase(obj);
+		Roots[obj]--;
+		if (Roots[obj] == 0)
+			Roots.erase(obj);
 	}
 
 	void AddObject(GCObject* obj) {
@@ -53,7 +70,7 @@ public:
 
 		// Mark all objects reachable from the roots
 		for (auto root : Roots) {
-			Mark(root, marked);
+			Mark(root.first, marked);
 		}
 
 		// Unmark all objects that are not reachable from the roots
@@ -64,6 +81,9 @@ public:
 		}
 
 		// Delete all unmarked objects
+		if (unmarked.size() == 0)
+			return;
+		std::cerr << "Erased " << unmarked.size() << " objects.\n";
 		for (auto obj : unmarked) {
 			Objects.erase(obj);
 			delete obj;

@@ -10,6 +10,7 @@
 #include "GameBuffer.h"
 
 #include <thread>
+#include <windows.h>
 
 void startup() {
 	auto hstdin = GetStdHandle(STD_INPUT_HANDLE);
@@ -83,6 +84,10 @@ int main() {
 					clr = PredefinedColor::Keyword;
 					break;
 				}
+				if (tok.lexeme == "_this") {
+					clr = PredefinedColor::Function;
+					break;
+				}
 				if (tok.lexeme == "for" ||
 					tok.lexeme == "while" ||
 					tok.lexeme == "if" ||
@@ -146,6 +151,13 @@ int main() {
 			if (c == '\t') {
 				buf.SetPixel(cx, cy, { { 255, 20, 20, 20 }, {}, '|' });
 				cx += 4;
+				continue;
+			}
+			if (cx >= csbi.dwSize.X - 1)
+			{
+				cx = 0;
+				cy++;
+				i--;
 				continue;
 			}
 			if (c == '\n') {
@@ -297,6 +309,7 @@ int main() {
 						}
 						if (exp != 0)
 							delete exp;
+						ctx.gc.Collect();
 						std::cin.get();
 						std::cin.clear();
 					}
@@ -358,6 +371,16 @@ int main() {
 			}
 			if (ir.Event.KeyEvent.uChar.AsciiChar < 32)
 				continue;
+			if (ir.Event.KeyEvent.uChar.AsciiChar == '}' || ir.Event.KeyEvent.uChar.AsciiChar == ')' || ir.Event.KeyEvent.uChar.AsciiChar == ']')
+			{
+				if (cursor > 0)
+				{
+					if (inputbuf[cursor - 1] == '\t')
+					{
+						inputbuf.erase(inputbuf.begin() + --cursor);
+					}
+				}
+			}
 			inputbuf.insert(inputbuf.begin() + cursor, ir.Event.KeyEvent.uChar.AsciiChar);
 			cursor++;
 		}
