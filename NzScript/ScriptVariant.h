@@ -52,7 +52,7 @@ struct Variant {
 			return "{Script Object}";
 		case DataType::InternMethod:
 			return "{Internal Method}";
-		case DataType::String: 
+		case DataType::String:
 			return ((GCString*)Object)->Pointer;
 		default:
 			return "Unknown";
@@ -80,10 +80,10 @@ public:
 	}
 	void Set(std::string s, Variant v) {
 		auto& v2 = Fields[s];
-		if (v2.Type == Variant::DataType::Object) {
+		if (v2.Type == Variant::DataType::Object || v.Type == Variant::DataType::String) {
 			RemoveRef(v2.Object);
 		}
-		if (v.Type == Variant::DataType::Object) {
+		if (v.Type == Variant::DataType::Object || v.Type == Variant::DataType::String) {
 			AddRef(v.Object);
 		}
 		Fields[s] = v;
@@ -118,17 +118,25 @@ public:
 		return typeid(ScriptArray);
 	}
 	void Set(size_t index, Variant v) {
+		if (index >= Variants.size()) {
+			Variants.resize(index + 1);
+		}
 		auto& v2 = Variants[index];
-		if (v2.Type == Variant::DataType::Object) {
+		if (v2.Type == Variant::DataType::Object || v.Type == Variant::DataType::String) {
 			RemoveRef(v2.Object);
 		}
-		if (v.Type == Variant::DataType::Object) {
+		if (v.Type == Variant::DataType::Object || v.Type == Variant::DataType::String) {
 			AddRef(v.Object);
 		}
 		Variants[index] = v;
 		return;
 	}
+	size_t Size() {
+		return Variants.size();
+	}
 	Variant Get(size_t index) {
+		if (index >= Variants.size())
+			return {};
 		return Variants[index];
 	}
 };

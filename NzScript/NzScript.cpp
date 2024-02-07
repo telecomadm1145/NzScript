@@ -53,6 +53,7 @@ int main() {
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
 	INPUT_RECORD ir{};
 	DWORD _;
+	int scrolly = 0;
 	while (1) {
 		GetConsoleScreenBufferInfo(hConsole, &csbi);
 		buf.ResizeBuffer(csbi.dwSize.X, csbi.dwSize.Y);
@@ -80,7 +81,7 @@ int main() {
 			auto clr = PredefinedColor::None;
 			switch (tok.type) {
 			case Lexer::TokenType::Identifier: {
-				if (tok.lexeme == "function") {
+				if (tok.lexeme == "function" || tok.lexeme == "var") {
 					clr = PredefinedColor::Keyword;
 					break;
 				}
@@ -114,6 +115,28 @@ int main() {
 					clr = PredefinedColor::Function;
 					break;
 				}
+				auto& topFrame = ctx.FunctionStack.top();
+				if (topFrame.Variants.find(std::string(tok.lexeme)) != topFrame.Variants.end()) {
+					auto v = topFrame.Variants[std::string(tok.lexeme)];
+					switch (v.Type) {
+					case Variant::DataType::Object: {
+						if (v.Object->GetType() == typeid(AST::ScriptMethod)) {
+							clr = PredefinedColor::Function;
+							break;
+						}
+						break;
+					}
+					case Variant::DataType::Null: {
+						clr = PredefinedColor::GlobalVariable;
+						break;
+					}
+					default: {
+						clr = PredefinedColor::LocalVariable;
+						break;
+					}
+					}
+					break;
+				}
 				clr = PredefinedColor::LocalVariable;
 			} break;
 			case Lexer::TokenType::FloatLiteral:
@@ -140,7 +163,9 @@ int main() {
 		}
 		curx = cury = 0;
 		bool setted = 0;
-		auto cx = 0, cy = 0;
+		auto cx = 4, cy = scrolly;
+		int linenum = 1;
+		buf.DrawString(std::to_string(linenum), 0, cy, {}, {});
 		for (size_t i = 0; i < inputbuf.size(); i++) {
 			auto c = inputbuf[i];
 			if (!setted && i >= cursor) {
@@ -153,16 +178,17 @@ int main() {
 				cx += 4;
 				continue;
 			}
-			if (cx >= csbi.dwSize.X - 1)
-			{
-				cx = 0;
+			if (cx >= csbi.dwSize.X - 1) {
+				cx = 4;
 				cy++;
 				i--;
 				continue;
 			}
 			if (c == '\n') {
+				linenum++;
+				buf.DrawString(std::to_string(linenum), 0, cy + 1, {}, {});
 				buf.SetPixel(cx, cy, { { 255, 120, 120, 120 }, {}, 0x21B5 });
-				cx = 0;
+				cx = 4;
 				cy++;
 				continue;
 			}
@@ -213,6 +239,18 @@ int main() {
 		}
 		buf.Output();
 		std::cout << "\u001b[" << cury + 1 << ";" << curx + 1 << "H";
+		while (true) {
+			if (cury >= csbi.dwSize.Y - 1) {
+				scrolly -= 5;
+				cury -= 5;
+			}
+			else if (cury < 0) {
+				scrolly += 5;
+				cury += 5;
+			}
+			else
+				break;
+		}
 		ReadConsoleInput(hInput, &ir, 1, &_);
 		if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
 			switch (ir.Event.KeyEvent.wVirtualKeyCode) {
@@ -296,17 +334,17 @@ int main() {
 			case 13: {
 				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
 					{
-						std::cout << "\u001b[38;2;255;255;255m\u001b[" << cury + 2 << ";" << 1 << "H";
+						std::cout << "\u001b[38;2;255;255;255m\u001b[" << linenum + 2 << ";" << 1 << "H";
 						std::cout << "Output:\n";
 						Lexer lex2{ inputbuf };
 						Parser p{ lex2.tokenize() };
 						AST::Program* exp = 0;
-						try {
+						//try {
 							doExecute(p, exp, ctx);
-						}
+						/*}
 						catch (std::exception& ex) {
 							std::cout << ex.what() << "\n";
-						}
+						}*/
 						if (exp != 0)
 							delete exp;
 						ctx.gc.Collect();
@@ -371,12 +409,9 @@ int main() {
 			}
 			if (ir.Event.KeyEvent.uChar.AsciiChar < 32)
 				continue;
-			if (ir.Event.KeyEvent.uChar.AsciiChar == '}' || ir.Event.KeyEvent.uChar.AsciiChar == ')' || ir.Event.KeyEvent.uChar.AsciiChar == ']')
-			{
-				if (cursor > 0)
-				{
-					if (inputbuf[cursor - 1] == '\t')
-					{
+			if (ir.Event.KeyEvent.uChar.AsciiChar == '}' || ir.Event.KeyEvent.uChar.AsciiChar == ')' || ir.Event.KeyEvent.uChar.AsciiChar == ']') {
+				if (cursor > 0) {
+					if (inputbuf[cursor - 1] == '\t') {
 						inputbuf.erase(inputbuf.begin() + --cursor);
 					}
 				}

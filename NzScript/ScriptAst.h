@@ -78,6 +78,21 @@ namespace AST {
 			return VariantName;
 		}
 	};
+	class GlobalVariantRefExpression : public Expression {
+	public:
+		GlobalVariantRefExpression(std::string varname) : VariantName(varname) {
+		}
+		std::string VariantName;
+		Variant Eval(ScriptContext& ctx) override {
+			return ctx.LookupGlobal(VariantName);
+		}
+		bool IsLeftValue() override {
+			return true;
+		}
+		void Set(ScriptContext& ctx, Variant v) {
+			ctx.SetGlobalVar(VariantName, v);
+		}
+	};
 	class StringExpression : public Expression {
 	public:
 		std::string str;
@@ -117,6 +132,7 @@ namespace AST {
 		Div,
 		Mov,
 		Member,
+		Index,
 
 		Greater,
 		Lesser,
@@ -160,8 +176,7 @@ namespace AST {
 		virtual void Set(ScriptContext& ctx, Variant v) {
 			auto l = leftExpression_->Eval(ctx);
 			auto r = rightExpression_->GetVariableName();
-			if (l.Type == Variant::DataType::Object)
-			{
+			if (l.Type == Variant::DataType::Object) {
 				((ScriptObject*)l.Object)->Set(r, v);
 			}
 		}
@@ -567,11 +582,68 @@ namespace AST {
 	private:
 		Expression* leftExpression_;
 		Expression* rightExpression_;
+		virtual bool IsLeftValue() {
+			return true;
+		}
+		virtual void Set(ScriptContext& ctx, Variant v) {
+			auto lft = leftExpression_->Eval(ctx);
+			auto rht = rightExpression_->Eval(ctx);
+			switch (lft.Type) {
+			case Variant::DataType::Object: {
+				const auto& typ = lft.Object->GetType();
+				if (typ == typeid(ScriptObject)) {
+					if (rht.Type != Variant::DataType::String)
+						throw std::exception("Right should be a string.");
+					std::string s = ((GCString*)rht.Object)->Pointer;
+					((ScriptObject*)lft.Object)->Set(s, v);
+					return;
+				}
+				if (typ == typeid(ScriptArray)) {
+					auto arr = (ScriptArray*)lft.Object;
+					auto ind = script_cast<long long>(rht);
+					if (ind < 0) {
+						ind += arr->Size();
+					}
+					if (ind < 0) {
+						throw std::exception("Bad backward index.");
+					}
+					arr->Set(ind, v);
+					return;
+				}
+				break;
+			}
+			default:
+				break;
+			}
+			throw std::exception("Invalid left val.");
+		}
 		Variant Eval(ScriptContext& ctx) override {
 			auto lft = leftExpression_->Eval(ctx);
 			auto rht = rightExpression_->Eval(ctx);
-
-			throw std::exception("Cannot index.");
+			switch (lft.Type) {
+			case Variant::DataType::Object: {
+				const auto& typ = lft.Object->GetType();
+				if (typ == typeid(ScriptObject)) {
+					if (rht.Type != Variant::DataType::String)
+						throw std::exception("Right should be a string.");
+					std::string s = ((GCString*)rht.Object)->Pointer;
+					return ((ScriptObject*)lft.Object)->Get(s);
+				}
+				if (typ == typeid(ScriptArray)) {
+					auto arr = (ScriptArray*)lft.Object;
+					auto ind = script_cast<long long>(rht);
+					if (ind < 0) {
+						ind += arr->Size();
+					}
+					if (ind < 0) {
+						throw std::exception("Bad backward index.");
+					}
+					return arr->Get(ind);
+				}
+			}
+			default:
+				break;
+			}
 			return {};
 		}
 	};
@@ -696,23 +768,59 @@ namespace AST {
 			case AST::UnOp::Positive: {
 				auto v = left->Eval(ctx);
 				if (v.Type == Variant::DataType::Double) {
-					return +(v.Double);
+					return v.Double;
 				}
 				if (v.Type == Variant::DataType::Float) {
-					return +(v.Float);
+					return v.Float;
 				}
 				if (v.Type == Variant::DataType::Int) {
-					return +(v.Int);
+					return v.Int;
 				}
 				if (v.Type == Variant::DataType::Long) {
-					return +(v.Long);
+					return v.Long;
 				}
 				throw std::exception("Bad input.");
 			} break;
-			case AST::UnOp::Increase:
-				break;
-			case AST::UnOp::Decrease:
-				break;
+			case AST::UnOp::Increase: {
+				auto v = left->Eval(ctx);
+				if (v.Type == Variant::DataType::Double) {
+					left->Set(ctx, ++v.Double);
+					return v.Double;
+				}
+				if (v.Type == Variant::DataType::Float) {
+					left->Set(ctx, ++v.Float);
+					return v.Float;
+				}
+				if (v.Type == Variant::DataType::Int) {
+					left->Set(ctx, ++v.Int);
+					return v.Int;
+				}
+				if (v.Type == Variant::DataType::Long) {
+					left->Set(ctx, ++v.Long);
+					return v.Long;
+				}
+				throw std::exception("Bad input.");
+			} break;
+			case AST::UnOp::Decrease: {
+				auto v = left->Eval(ctx);
+				if (v.Type == Variant::DataType::Double) {
+					left->Set(ctx, --v.Double);
+					return v.Double;
+				}
+				if (v.Type == Variant::DataType::Float) {
+					left->Set(ctx, --v.Float);
+					return v.Float;
+				}
+				if (v.Type == Variant::DataType::Int) {
+					left->Set(ctx, --v.Int);
+					return v.Int;
+				}
+				if (v.Type == Variant::DataType::Long) {
+					left->Set(ctx, --v.Long);
+					return v.Long;
+				}
+				throw std::exception("Bad input.");
+			} break;
 			default:
 				break;
 			}
@@ -1017,6 +1125,11 @@ private:
 		}
 		if (match(Lexer::TokenType::Identifier)) {
 			std::string_view identifier = tokens_[position_ - 1].lexeme;
+			if (identifier == "var") {
+				position_++;
+				identifier = tokens_[position_ - 1].lexeme;
+				return new AST::GlobalVariantRefExpression(std::string(identifier));
+			}
 			// TODO: Create an AST node for identifier expression
 			return new AST::VariantRefExpression(std::string(identifier));
 		}
@@ -1060,6 +1173,7 @@ private:
 		case AST::BinOp::Mul:
 		case AST::BinOp::Div:
 			return 99;
+		case AST::BinOp::Index:
 		case AST::BinOp::Mov:
 			return 5;
 		case AST::BinOp::Greater:
@@ -1149,13 +1263,16 @@ private:
 				}
 			}
 			else if (match(Lexer::TokenType::Delimiter, "[")) {
+				if (getOperatorPrecedence(AST::BinOp::Index) <= precedence) {
+					position_--;
+					break;
+				}
 				auto index = parseExpression();
 				expect(Lexer::TokenType::Delimiter, "]");
 				left = new AST::IndexExpression{ left, index };
 			}
 			else if (match(Lexer::TokenType::Operator, "=")) {
-				if (getOperatorPrecedence(AST::BinOp::Mov) <= precedence)
-				{
+				if (getOperatorPrecedence(AST::BinOp::Mov) <= precedence) {
 					position_--;
 					break;
 				}
