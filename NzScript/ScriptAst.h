@@ -146,6 +146,8 @@ namespace AST {
 		Band,
 		Bor,
 		Xor,
+
+		Range,
 	};
 	class BinaryExpression : public Expression {
 	public:
@@ -307,6 +309,11 @@ namespace AST {
 				case Variant::DataType::Object: {
 					if (l.Object->GetType() == typeid(ScriptObject)) {
 						return ((ScriptObject*)l.Object)->Get(r);
+					}
+					if (l.Object->GetType() == typeid(ScriptArray)) {
+						if (r == "size")
+							return (long long)((ScriptArray*)l.Object)->Size();
+						throw std::exception("Invalid opreation to array.");
 					}
 				} break;
 				default:
@@ -551,6 +558,39 @@ namespace AST {
 					};
 				}
 
+				throw std::exception("Cannot promote a fit type.");
+			} break;
+			case AST::BinOp::Range: {
+				auto lft = leftExpression_->Eval(ctx);
+				auto rht = rightExpression_->Eval(ctx);
+				if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
+					Variant v{};
+					v.Type = Variant::DataType::Object;
+					auto arr = new ScriptArray(ctx.gc);
+					if (rht.Long < lft.Long)
+						std::swap(rht.Long, lft.Long);
+					arr->Variants.resize(rht.Long - lft.Long);
+					size_t p = 0;
+					for (long long i = lft.Long; i < rht.Long; i++) {
+						arr->Set(p++, i);
+					}
+					v.Object = arr;
+					return v;
+				}
+				if (lft.Type == Variant::DataType::Int || rht.Type == Variant::DataType::Int) {
+					Variant v{};
+					v.Type = Variant::DataType::Object;
+					auto arr = new ScriptArray(ctx.gc);
+					if (rht.Int < lft.Int)
+						std::swap(rht.Int, lft.Int);
+					arr->Variants.resize(rht.Int - lft.Int);
+					size_t p = 0;
+					for (int i = lft.Int; i < rht.Long; i++) {
+						arr->Set(p++, i);
+					}
+					v.Object = arr;
+					return v;
+				}
 				throw std::exception("Cannot promote a fit type.");
 			} break;
 			default:
@@ -942,7 +982,19 @@ namespace AST {
 			return bodyStatement_;
 		}
 		void Execute(ScriptContext& ctx) override {
-			__debugbreak();
+			for (startExpression_->Eval(ctx); endExpression_->Eval(ctx); stepExpression_->Eval(ctx)) {
+				bodyStatement_->Execute(ctx);
+				if (ctx.Status == ScriptContext::ScriptStatus::Break) {
+					ctx.ResetStatus();
+					break;
+				}
+				if (ctx.Status == ScriptContext::ScriptStatus::Continue) {
+					ctx.ResetStatus();
+					continue;
+				}
+				if (!ctx.ShouldRun())
+					break;
+			}
 		}
 
 	private:
@@ -981,6 +1033,86 @@ namespace AST {
 			ctx.DoContinue();
 		}
 	};
+	class RangeForStatement : public Statement {
+	public:
+		RangeForStatement(std::string var, Expression* rangeExpression, Statement* bodyStatement)
+			: varname(var), rangeExpression(rangeExpression), bodyStatement_(bodyStatement) {}
+
+		std::string getVariableName() const {
+			return varname;
+		}
+
+		Expression* getRangeExpression() const {
+			return rangeExpression;
+		}
+
+		Statement* getBodyStatement() const {
+			return bodyStatement_;
+		}
+
+		void Execute(ScriptContext& ctx) override {
+			auto rng = rangeExpression->Eval(ctx);
+			switch (rng.Type) {
+			case Variant::DataType::String: {
+				throw std::exception("Bad input.");
+				break;
+			}
+			case Variant::DataType::Object: {
+				if (rng.Object->GetType() == typeid(ScriptObject)) {
+					auto obj = (ScriptObject*)rng.Object;
+					for (auto kv : obj->Fields) {
+						Variant v2{};
+						auto obj2 = new ScriptObject(ctx.gc);
+						obj2->Set("key", Variant{ ctx.gc, kv.first.c_str() });
+						obj2->Set("value", kv.second);
+						v2.Type = Variant::DataType::Object;
+						v2.Object = obj2;
+						ctx.SetFunctionVar(varname, v2);
+						bodyStatement_->Execute(ctx);
+						if (ctx.Status == ScriptContext::ScriptStatus::Break) {
+							ctx.ResetStatus();
+							break;
+						}
+						if (ctx.Status == ScriptContext::ScriptStatus::Continue) {
+							ctx.ResetStatus();
+							continue;
+						}
+						if (!ctx.ShouldRun())
+							break;
+					}
+				}
+				else if (rng.Object->GetType() == typeid(ScriptArray)) {
+					auto obj = (ScriptArray*)rng.Object;
+					for (auto v2 : obj->Variants) {
+						ctx.SetFunctionVar(varname, v2);
+						bodyStatement_->Execute(ctx);
+						if (ctx.Status == ScriptContext::ScriptStatus::Break) {
+							ctx.ResetStatus();
+							break;
+						}
+						if (ctx.Status == ScriptContext::ScriptStatus::Continue) {
+							ctx.ResetStatus();
+							continue;
+						}
+						if (!ctx.ShouldRun())
+							break;
+					}
+				}
+				else {
+					throw std::exception("Bad input.");
+				}
+				break;
+			}
+			default:
+				throw std::exception("Bad input.");
+			}
+		}
+
+	private:
+		std::string varname;
+		Expression* rangeExpression;
+		Statement* bodyStatement_;
+	};
 }
 class Parser {
 public:
@@ -997,6 +1129,9 @@ public:
 		}
 
 		return program;
+	}
+	size_t GetPos() {
+		return position_;
 	}
 
 private:
@@ -1044,12 +1179,31 @@ private:
 				return new AST::WhileStatement(cond, parseStatement());
 		}
 		else if (match(Lexer::TokenType::Identifier, "for")) {
-			return new AST::ForStatement(parseExpression(), parseExpression(), parseExpression(), parseStatement());
+			expect(Lexer::TokenType::Delimiter, "(");
+			auto a = parseExpression();
+			expect(Lexer::TokenType::Delimiter, ";");
+			auto b = parseExpression();
+			expect(Lexer::TokenType::Delimiter, ";");
+			auto c = parseExpression();
+			expect(Lexer::TokenType::Delimiter, ")");
+			return new AST::ForStatement(a, b, c, parseStatement());
+		}
+		else if (match(Lexer::TokenType::Identifier, "foreach")) {
+			expect(Lexer::TokenType::Delimiter, "(");
+			auto var = tokens_[position_].lexeme;
+			position_++;
+			expect(Lexer::TokenType::Operator, ":");
+			auto c = parseExpression();
+			expect(Lexer::TokenType::Delimiter, ")");
+			return new AST::RangeForStatement((std::string)var, c, parseStatement());
 		}
 		else if (match(Lexer::TokenType::Delimiter, "{")) {
 			std::vector<AST::Statement*> statements;
 			while (!match(Lexer::TokenType::Delimiter, "}")) {
+				auto old_pos = position_;
 				auto stat = parseStatement();
+				if (old_pos == position_)
+					throw std::exception("Unexpected character.");
 				if (stat != nullptr)
 					statements.push_back(stat);
 			}
@@ -1158,9 +1312,11 @@ private:
 			return pr;
 		}
 		else {
+			if (position_ >= tokens_.size())
+				throw std::exception("Reached EOF.");
 			auto op = unopConvert(tokens_[position_].lexeme);
 			if (op == AST::UnOp::Nop)
-				return nullptr;
+				throw std::exception("Unable to parse.");
 			position_++;
 			return new AST::UnaryExpression{ parsePrimaryExpression(), op };
 		}
@@ -1192,6 +1348,8 @@ private:
 			return 9;
 		case AST::BinOp::Member:
 			return 200;
+		case AST::BinOp::Range:
+			return 300;
 		default:
 			return 1;
 		}
@@ -1244,6 +1402,9 @@ private:
 		}
 		if (sv == "^") {
 			return AST::BinOp::Xor;
+		}
+		if (sv == "@") {
+			return AST::BinOp::Range;
 		}
 		return AST::BinOp::Nop;
 	}
@@ -1323,6 +1484,7 @@ private:
 			position_++;
 			return;
 		}
-		throw std::exception("Expect a token.");
+		auto s = std::format("Expect \"{}\" however got a \"{}\".", lexeme, tokens_[position_].lexeme);
+		throw std::exception(s.c_str());
 	}
 };

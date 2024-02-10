@@ -24,9 +24,8 @@ void startup() {
 	SetConsoleMode(hstdout, mode);
 	SetConsoleOutputCP(65001);
 }
-void doExecute(auto& p, auto exp, auto& ctx) {
+void doExecute(auto exp, auto& ctx) {
 	__try {
-		exp = p.parse();
 		exp->Execute(ctx);
 	}
 	__except (GetExceptionCode() == EXCEPTION_STACK_OVERFLOW) {
@@ -36,10 +35,12 @@ void doExecute(auto& p, auto exp, auto& ctx) {
 }
 int main() {
 	startup();
+	std::string undobuf = "";
 	std::string inputbuf = "";
 	int cursor = 0;
 	int curx = 0;
 	int cury = 0;
+	int errorToken = -1;
 	ScriptContext ctx{};
 	LoadBasic(ctx);
 	LoadCMath(ctx);
@@ -95,7 +96,8 @@ int main() {
 					tok.lexeme == "break" ||
 					tok.lexeme == "continue" ||
 					tok.lexeme == "return" ||
-					tok.lexeme == "else") {
+					tok.lexeme == "else" ||
+					tok.lexeme == "foreach") {
 					clr = PredefinedColor::Ctrlflow;
 					break;
 				}
@@ -126,10 +128,6 @@ int main() {
 						}
 						break;
 					}
-					case Variant::DataType::Null: {
-						clr = PredefinedColor::GlobalVariable;
-						break;
-					}
 					default: {
 						clr = PredefinedColor::LocalVariable;
 						break;
@@ -156,6 +154,9 @@ int main() {
 			}
 			default:
 				break;
+			}
+			if (j == errorToken) {
+				clr = PredefinedColor::Invalid;
 			}
 			for (size_t i = off1; i < off2; i++) {
 				map[i] = clr;
@@ -253,6 +254,13 @@ int main() {
 		}
 		ReadConsoleInput(hInput, &ir, 1, &_);
 		if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
+			if (ir.Event.KeyEvent.wVirtualKeyCode == 'Z') {
+				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
+					cursor = std::clamp(cursor, 0, (int)undobuf.size());
+					std::swap(undobuf, inputbuf);
+					continue;
+				}
+			}
 			switch (ir.Event.KeyEvent.wVirtualKeyCode) {
 			case VK_LEFT: {
 				if (cursor > 0)
@@ -316,6 +324,10 @@ int main() {
 				continue;
 			}
 			case VK_END: {
+				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
+					cursor = inputbuf.size() - 1;
+					continue;
+				}
 				while (cursor < inputbuf.size()) {
 					if (inputbuf[cursor] == '\n')
 						break;
@@ -324,6 +336,10 @@ int main() {
 				continue;
 			}
 			case VK_HOME: {
+				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
+					cursor = 0;
+					continue;
+				}
 				while (cursor > 0) {
 					if (inputbuf[cursor - 1] == '\n')
 						break;
@@ -332,6 +348,7 @@ int main() {
 				continue;
 			}
 			case 13: {
+				undobuf = inputbuf;
 				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
 					{
 						std::cout << "\u001b[38;2;255;255;255m\u001b[" << linenum + 2 << ";" << 1 << "H";
@@ -339,12 +356,20 @@ int main() {
 						Lexer lex2{ inputbuf };
 						Parser p{ lex2.tokenize() };
 						AST::Program* exp = 0;
-						//try {
-							doExecute(p, exp, ctx);
-						/*}
+						try {
+							exp = p.parse();
+						}
 						catch (std::exception& ex) {
-							std::cout << ex.what() << "\n";
-						}*/
+							std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
+							errorToken = p.GetPos();
+						}
+						if (exp != 0)
+							try {
+								doExecute(exp, ctx);
+							}
+							catch (std::exception& ex) {
+								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
+							}
 						if (exp != 0)
 							delete exp;
 						ctx.gc.Collect();
@@ -390,6 +415,7 @@ int main() {
 				continue;
 			}
 			case 8: {
+				undobuf = inputbuf;
 				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
 					cursor = 0;
 					inputbuf.resize(0);
@@ -397,18 +423,34 @@ int main() {
 				}
 				if (cursor > 0)
 					cursor--;
+				errorToken = -1;
+				inputbuf.erase(inputbuf.begin() + cursor);
+				continue;
+			}
+			case VK_DELETE: {
+				undobuf = inputbuf;
+				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
+					cursor = 0;
+					inputbuf.resize(0);
+					continue;
+				}
+				errorToken = -1;
 				inputbuf.erase(inputbuf.begin() + cursor);
 				continue;
 			}
 			case 9: {
+				undobuf = inputbuf;
 				inputbuf.insert(inputbuf.begin() + cursor, '\t');
 				cursor++;
+				break;
 			}
 			default:
 				break;
 			}
 			if (ir.Event.KeyEvent.uChar.AsciiChar < 32)
 				continue;
+			errorToken = -1;
+			undobuf = inputbuf;
 			if (ir.Event.KeyEvent.uChar.AsciiChar == '}' || ir.Event.KeyEvent.uChar.AsciiChar == ')' || ir.Event.KeyEvent.uChar.AsciiChar == ']') {
 				if (cursor > 0) {
 					if (inputbuf[cursor - 1] == '\t') {

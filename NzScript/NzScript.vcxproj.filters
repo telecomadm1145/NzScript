@@ -60,9 +60,6 @@
     <ClInclude Include="Defines.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="NzScript.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
     <ClInclude Include="ScriptEmitter.h">
       <Filter>源文件</Filter>
     </ClInclude>

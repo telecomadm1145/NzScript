@@ -148,7 +148,6 @@
     <ClInclude Include="ConsoleText.h" />
     <ClInclude Include="Defines.h" />
     <ClInclude Include="GameBuffer.h" />
-    <ClInclude Include="NzScript.h" />
     <ClInclude Include="ScriptAst.h" />
     <ClInclude Include="ScriptBulitins.h" />
     <ClInclude Include="ScriptContext.h" />

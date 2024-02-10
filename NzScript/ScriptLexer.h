@@ -185,7 +185,7 @@ private:
 	}
 
 	Token readOperator() {
-		if (position_ < (long long )input_.size() - 1 && isOperator(input_[position_ + 1])) {
+		if ((long long)position_ < (long long)input_.size() - 1 && isOperator(input_[position_ + 1])) {
 			auto sv = input_.substr(position_, 2);
 			position_ += 2;
 			return Token(TokenType::Operator, sv);

@@ -36,28 +36,7 @@ struct Variant {
 		String,
 		VariantPtr_NotUsed,
 	} Type;
-	std::string ToString() {
-		switch (Type) {
-		case DataType::Null:
-			return "Null";
-		case DataType::Int:
-			return std::to_string(Int);
-		case DataType::Long:
-			return std::to_string(Long);
-		case DataType::Float:
-			return std::to_string(Float);
-		case DataType::Double:
-			return std::to_string(Double);
-		case DataType::Object:
-			return "{Script Object}";
-		case DataType::InternMethod:
-			return "{Internal Method}";
-		case DataType::String:
-			return ((GCString*)Object)->Pointer;
-		default:
-			return "Unknown";
-		}
-	}
+	std::string ToString();
 	operator bool() {
 		if (Type == DataType::Null)
 			return false;
@@ -71,10 +50,8 @@ public:
 	ScriptObject(GC& gc) : GCObject(gc) {
 	}
 
-private:
-	std::unordered_map<std::string, Variant> Fields;
-
 public:
+	std::unordered_map<std::string, Variant> Fields;
 	const std::type_info& GetType() const noexcept override {
 		return typeid(ScriptObject);
 	}
@@ -108,10 +85,8 @@ namespace AST {
 }
 using ScriptMethod = AST::ScriptMethod;
 class ScriptArray : public ScriptObject {
-private:
-	std::vector<Variant> Variants;
-
 public:
+	std::vector<Variant> Variants;
 	ScriptArray(GC& gc) : ScriptObject(gc) {
 	}
 	const std::type_info& GetType() const noexcept override {
@@ -131,12 +106,21 @@ public:
 		Variants[index] = v;
 		return;
 	}
+	void Add(Variant v) {
+		if (v.Type == Variant::DataType::Object || v.Type == Variant::DataType::String) {
+			AddRef(v.Object);
+		}
+		Variants.push_back(v);
+		return;
+	}
 	size_t Size() {
 		return Variants.size();
 	}
 	Variant Get(size_t index) {
-		if (index >= Variants.size())
+		if (index >= Variants.size()) {
+			Variants.resize(index + 1);
 			return {};
+		}
 		return Variants[index];
 	}
 };
@@ -223,4 +207,63 @@ double script_cast(Variant v) {
 template <>
 std::string script_cast(Variant v) {
 	return v.ToString();
+}
+std::string Variant::ToString() {
+	switch (Type) {
+	case DataType::Null:
+		return "Null";
+	case DataType::Int:
+		return std::to_string(Int);
+	case DataType::Long:
+		return std::to_string(Long);
+	case DataType::Float:
+		return std::to_string(Float);
+	case DataType::Double:
+		return std::to_string(Double);
+	case DataType::Object: {
+		const auto& typ = Object->GetType();
+		if (typ == typeid(ScriptObject)) {
+			std::string s = "{";
+			for (auto p : ((ScriptObject*)Object)->Fields) {
+				s += p.first;
+				s += "=";
+				s += p.second.ToString();
+				s += ",";
+			}
+			if (s.size() != 1)
+				s.erase(s.end() - 1);
+			s += "}";
+			return s;
+		}
+		if (typ == typeid(ScriptArray)) {
+			std::string s = "[";
+			for (auto p : ((ScriptArray*)Object)->Variants) {
+				s += p.ToString();
+				s += ",";
+			}
+			if (s.size() != 1)
+				s.erase(s.end() - 1);
+			s += "]";
+			return s;
+		}
+		if (typ == typeid(ScriptMethod)) {
+			std::string s = "{Method(";
+			for (auto p : ((ScriptMethod*)Object)->Args) {
+				s += p;
+				s += ",";
+			}
+			if (s.size() != 1)
+				s.erase(s.end() - 1);
+			s += ")}";
+			return s;
+		}
+		return "Unknown";
+	}
+	case DataType::InternMethod:
+		return "{Internal Method}";
+	case DataType::String:
+		return ((GCString*)Object)->Pointer;
+	default:
+		return "Unknown";
+	}
 }
