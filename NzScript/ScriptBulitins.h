@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "ScriptContext.h"
 #include <cmath>
 #include <iostream>

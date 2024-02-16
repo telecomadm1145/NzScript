@@ -1,9 +1,9 @@
-#include <mutex>
+О╩©#include <mutex>
 #include <unordered_set>
 #include <unordered_map>
 #include <iostream>
 /// <summary>
-/// GC ╤тоС
+/// GC Е╞╧Х╠║
 /// </summary>
 class GCObject {
 public:
@@ -33,7 +33,7 @@ public:
 	}
 };
 /// <summary>
-/// GC иообндюЮ
+/// GC Д╦┼Д╦▀Ф√┤Г╠╩
 /// </summary>
 class GC {
 	std::mutex _lock;

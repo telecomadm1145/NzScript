@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "ScriptVariant.h"
 #include <stack>
 using ScriptInternMethod = Variant::ScriptInternMethod;

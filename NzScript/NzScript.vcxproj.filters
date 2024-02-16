@@ -60,10 +60,13 @@
     <ClInclude Include="Defines.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="ScriptEmitter.h">
+    <ClInclude Include="ScriptGC.h">
       <Filter>源文件</Filter>
     </ClInclude>
-    <ClInclude Include="ScriptGC.h">
+    <ClInclude Include="ScriptJit.h">
+      <Filter>源文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ScriptIr.h">
       <Filter>源文件</Filter>
     </ClInclude>
   </ItemGroup>

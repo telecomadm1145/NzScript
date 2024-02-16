@@ -1,4 +1,4 @@
-void LoadCMath(ScriptContext& ctx) {
+﻿void LoadCMath(ScriptContext& ctx) {
 	ctx.InternalConstants["Pi"] = std::atan(1.0) * 4;
 	ctx.InternalConstants["E"] = std::exp(1.0);
 	ctx.InternalConstants["NaN"] = 1.0 / 0.0 * 0.0;

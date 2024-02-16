@@ -1,6 +1,8 @@
-#pragma once
+ï»¿#pragma once
 #include "ScriptVariant.h"
 #include "ScriptContext.h"
+#include "ScriptIr.h"
+
 namespace AST {
 
 	class Statement {
@@ -10,7 +12,12 @@ namespace AST {
 		Statement(Statement&&) = delete;
 		virtual void Execute(ScriptContext& ctx) = 0;
 		virtual ~Statement() = default;
+		virtual void Emit(ir::Emitter& em) {
+			em.EmitOp(ir::Opcode::OP_Nop);
+			// throw std::exception("Invalid operation.");
+		}
 	};
+
 	class Program {
 	public:
 		void addStatement(class Statement* statement) {
@@ -26,6 +33,12 @@ namespace AST {
 				ctx.ResetStatus();
 			}
 		}
+		void Emit(ir::Emitter& e) {
+			for (auto stat : statements_) {
+				stat->Emit(e);
+			}
+			e.EmitOp(ir::Opcode::OP_RetNull);
+		}
 
 	private:
 		std::vector<Statement*> statements_;
@@ -34,6 +47,9 @@ namespace AST {
 	public:
 		void Execute(ScriptContext& ctx) override {
 			Eval(ctx);
+		}
+		virtual bool IsConst() {
+			return false;
 		}
 		virtual bool IsLeftValue() {
 			return false;
@@ -44,6 +60,11 @@ namespace AST {
 		virtual Variant Eval(ScriptContext& ctx) = 0;
 		virtual std::string GetVariableName() {
 			throw std::exception("Invalid operation.");
+		}
+		virtual void EmitSet(ir::Emitter& em, Expression* tgt) {
+			throw std::exception("Invalid operation.");
+		}
+		virtual void ReduceConstant() {
 		}
 	};
 	class LambdaExpression : public Expression {
@@ -77,6 +98,14 @@ namespace AST {
 		std::string GetVariableName() {
 			return VariantName;
 		}
+		void Emit(ir::Emitter& em) override {
+			em.EmitOp(ir::Opcode::OP_PushVar, VariantName);
+		}
+		void EmitSet(ir::Emitter& em, Expression* tgt) override {
+			if (tgt != 0)
+				tgt->Emit(em);
+			em.EmitOp(ir::Opcode::OP_StoreVar, VariantName);
+		}
 	};
 	class GlobalVariantRefExpression : public Expression {
 	public:
@@ -92,12 +121,20 @@ namespace AST {
 		void Set(ScriptContext& ctx, Variant v) {
 			ctx.SetGlobalVar(VariantName, v);
 		}
+		void Emit(ir::Emitter& em) override {
+			em.EmitOp(ir::Opcode::OP_PushVar, VariantName);
+		}
+		void EmitSet(ir::Emitter& em, Expression* tgt) override {
+			if (tgt != 0)
+				tgt->Emit(em);
+			em.EmitOp(ir::Opcode::OP_StoreGlobalVar, VariantName);
+		}
 	};
 	class StringExpression : public Expression {
 	public:
 		std::string str;
 
-		// Í¨¹ý Expression ¼Ì³Ð
+		// é€šè¿‡ Expression ç»§æ‰¿
 		Variant Eval(ScriptContext& ctx) override {
 			return { ctx.gc, str.data() };
 		}
@@ -105,14 +142,51 @@ namespace AST {
 		StringExpression(const std::string& str)
 			: str(str) {
 		}
+		void Emit(ir::Emitter& em) override {
+			em.EmitOp(ir::Opcode::OP_PushStr, str);
+		}
 	};
 	class NumberExpression : public Expression {
 	public:
 		NumberExpression(Variant v) : var(v) {}
 		Variant var;
-		// Í¨¹ý Expression ¼Ì³Ð
+		virtual bool IsConst() {
+			return true;
+		}
+		// é€šè¿‡ Expression ç»§æ‰¿
 		Variant Eval(ScriptContext&) override {
 			return var;
+		}
+		void Emit(ir::Emitter& em) override {
+			if (var.Type == Variant::DataType::Int) {
+				if (var.Int == 0) {
+					em.EmitOp(ir::Opcode::OP_PushI4_0);
+				}
+				else if (var.Int == 1) {
+					em.EmitOp(ir::Opcode::OP_PushI4_1);
+				}
+				else
+					em.EmitOp(ir::Opcode::OP_PushI4, var.Int);
+			}
+			else if (var.Type == Variant::DataType::Long) {
+				if (var.Long == 0) {
+					em.EmitOp(ir::Opcode::OP_PushI4_0);
+				}
+				else if (var.Long == 1) {
+					em.EmitOp(ir::Opcode::OP_PushI4_1);
+				}
+				else
+					em.EmitOp(ir::Opcode::OP_PushI4, var.Long);
+			}
+			else if (var.Type == Variant::DataType::Float) {
+				em.EmitOp(ir::Opcode::OP_PushFP4, var.Float);
+			}
+			else if (var.Type == Variant::DataType::Double) {
+				em.EmitOp(ir::Opcode::OP_PushFP4, var.Double);
+			}
+			else {
+				throw std::runtime_error("err");
+			}
 		}
 	};
 	enum class UnOp {
@@ -149,11 +223,26 @@ namespace AST {
 
 		Range,
 	};
+
+	class OutNullStatement : public Statement {
+	public:
+		OutNullStatement(Expression* expr) : expr(expr) {}
+		Expression* expr;
+		void Execute(ScriptContext& ctx) override {
+			expr->Eval(ctx);
+		}
+		void Emit(ir::Emitter& em) override {
+			expr->Emit(em);
+			em.EmitOp(ir::Opcode::OP_Pop);
+		}
+	};
 	class BinaryExpression : public Expression {
 	public:
 		BinaryExpression(Expression* leftExpression, BinOp op, Expression* rightExpression)
 			: leftExpression_(leftExpression), op(op), rightExpression_(rightExpression) {}
-
+		virtual bool IsConst() {
+			return leftExpression_->IsConst() && rightExpression_->IsConst();
+		}
 		Expression* getLeftExpression() const {
 			return leftExpression_;
 		}
@@ -599,6 +688,82 @@ namespace AST {
 			}
 			return {};
 		}
+		void EmitSet(ir::Emitter& em, Expression* expr) override {
+
+		}
+		void Emit(ir::Emitter& em) override {
+			switch (op) {
+			case AST::BinOp::Mov:
+				leftExpression_->EmitSet(em, rightExpression_);
+				return;
+			case AST::BinOp::Member: {
+				leftExpression_->Emit(em);
+				auto r = rightExpression_->GetVariableName();
+				em.EmitOp(ir::Opcode::OP_PushStr, r);
+				em.EmitOp(ir::Opcode::OP_GetProp);
+				return;
+			}
+			}
+			leftExpression_->Emit(em);
+			rightExpression_->Emit(em);
+			switch (op) {
+			case AST::BinOp::Nop:
+				em.EmitOpI1(ir::Opcode::OP_Popn, 2);
+				break;
+			case AST::BinOp::Add:
+				em.EmitOp(ir::Opcode::OP_Add);
+				break;
+			case AST::BinOp::Sub:
+				em.EmitOp(ir::Opcode::OP_Sub);
+				break;
+			case AST::BinOp::Mul:
+				em.EmitOp(ir::Opcode::OP_Mul);
+				break;
+			case AST::BinOp::Div:
+				em.EmitOp(ir::Opcode::OP_Div);
+				break;
+			case AST::BinOp::Greater:
+				em.EmitOp(ir::Opcode::OP_Gt);
+				break;
+			case AST::BinOp::Lesser:
+				em.EmitOp(ir::Opcode::OP_Lt);
+				break;
+			case AST::BinOp::IsEqual:
+				em.EmitOp(ir::Opcode::OP_Equ);
+				break;
+			case AST::BinOp::GreaterOrEqual:
+				em.EmitOp(ir::Opcode::OP_Ge);
+				break;
+			case AST::BinOp::LesserOrEqual:
+				em.EmitOp(ir::Opcode::OP_Le);
+				break;
+			case AST::BinOp::NotEqual:
+				em.EmitOp(ir::Opcode::OP_Neq);
+				break;
+			case AST::BinOp::Or:
+				em.EmitOp(ir::Opcode::OP_Or);
+				break;
+			case AST::BinOp::And:
+				em.EmitOp(ir::Opcode::OP_And);
+				break;
+			case AST::BinOp::Band:
+				em.EmitOp(ir::Opcode::OP_Band);
+				break;
+			case AST::BinOp::Bor:
+				em.EmitOp(ir::Opcode::OP_Bor);
+				break;
+			case AST::BinOp::Xor:
+				em.EmitOp(ir::Opcode::OP_Xor);
+				break;
+			case AST::BinOp::Index:
+				em.EmitOp(ir::Opcode::OP_GetIndex);
+				break;
+			case AST::BinOp::Range:
+				throw std::runtime_error("Range haven't been suppported.");
+			default:
+				break;
+			}
+		}
 	};
 	class IndexExpression : public Expression {
 	public:
@@ -750,6 +915,13 @@ namespace AST {
 			throw std::exception("Left is not Callable.");
 			return {};
 		}
+		virtual void Emit(ir::Emitter& em) {
+			for (auto arg : arguments) {
+				arg->Emit(em);
+			}
+			method->Emit(em);
+			em.EmitOpI1(ir::Opcode::OP_Call, arguments.size());
+		}
 		~CallExpression() {
 			if (method != 0)
 				delete method;
@@ -757,6 +929,12 @@ namespace AST {
 				if (exp != 0)
 					delete exp;
 			}
+		}
+	};
+	class PassExpression : public Expression {
+	public:
+		Variant Eval(ScriptContext& ctx) override {
+			return {};
 		}
 	};
 	class UnaryExpression : public Expression {
@@ -771,7 +949,7 @@ namespace AST {
 				delete left;
 		}
 
-		// Í¨¹ý Expression ¼Ì³Ð
+		// é€šè¿‡ Expression ç»§æ‰¿
 		Variant Eval(ScriptContext& ctx) override {
 			switch (op) {
 			case AST::UnOp::Nop:
@@ -866,6 +1044,35 @@ namespace AST {
 			}
 			return {};
 		}
+
+		void Emit(ir::Emitter& em) override {
+			left->Emit(em);
+			switch (op) {
+			case AST::UnOp::Nop:
+				break;
+			case AST::UnOp::Not:
+				em.EmitOp(ir::Opcode::OP_Not);
+				break;
+			case AST::UnOp::Bnot:
+				em.EmitOp(ir::Opcode::OP_Bnot);
+				break;
+			case AST::UnOp::Negative:
+				em.EmitOp(ir::Opcode::OP_Neg);
+				break;
+			case AST::UnOp::Positive:
+				break;
+			case AST::UnOp::Increase: {
+				em.EmitOp(ir::Opcode::OP_Inc);
+				left->EmitSet(em, 0);
+			} break;
+			case AST::UnOp::Decrease: {
+				em.EmitOp(ir::Opcode::OP_Dec);
+				left->EmitSet(em, 0);
+			} break;
+			default:
+				break;
+			}
+		}
 	};
 	class StatementBlock : public Statement {
 	public:
@@ -877,6 +1084,11 @@ namespace AST {
 				exp->Execute(ctx);
 				if (!ctx.ShouldRun())
 					return;
+			}
+		}
+		void Emit(ir::Emitter& em) override {
+			for (auto exp : expressions) {
+				exp->Emit(em);
 			}
 		}
 
@@ -928,6 +1140,26 @@ namespace AST {
 			}
 		}
 
+		void Emit(ir::Emitter& em) override {
+			condition_->Emit(em);
+			auto beg = em.Bytes.size();
+			// je [elseBranch]
+			em.EmitOp(ir::Opcode::OP_Jz, 0);
+			thenStatement_->Emit(em);
+			auto el = em.Bytes.size();
+			if (elseStatement_ != 0) {
+				// jmp end
+				em.EmitOp(ir::Opcode::OP_Jmp, 0);
+				elseStatement_->Emit(em);
+				auto ed = em.Bytes.size();
+				em.Modify(em.Bytes.begin() + el + 1, (int)(ed - el - 5));
+				em.Modify(em.Bytes.begin() + beg + 1, (int)(el - beg));
+			}
+			else {
+				em.Modify(em.Bytes.begin() + beg + 1, (int)(el - beg - 5));
+			}
+		}
+
 	private:
 		Expression* condition_;
 		Statement* thenStatement_;
@@ -956,6 +1188,20 @@ namespace AST {
 				if (!ctx.ShouldRun())
 					break;
 			}
+		}
+		void Emit(ir::Emitter& em) override {
+			auto beg = em.Bytes.size();
+			condition_->Emit(em);
+			auto branch = em.Bytes.size();
+			em.EmitOp(ir::Opcode::OP_Jz, 0);
+			auto binds = em.LateBinds;
+			Statements->Emit(em);
+			auto end = em.Bytes.size();
+			em.EmitOp(ir::Opcode::OP_Jmp, -(int)(end - beg) - 5);
+			auto end2 = em.Bytes.size();
+			em.Modify(em.Bytes.begin() + branch + 1, (int)(end2 - branch) - 5);
+			em.EvalLateBinds(end2, beg);
+			em.LateBinds = binds;
 		}
 
 	private:
@@ -1025,12 +1271,18 @@ namespace AST {
 		void Execute(ScriptContext& ctx) override {
 			ctx.DoBreak();
 		}
+		void Emit(ir::Emitter& em) override {
+			em.EmitOpLate(ir::Opcode::OP_Jmp, ir::Emitter::LateBindPointType::Break);
+		}
 	};
 	class ContinueStatement : public Statement {
 	public:
 		ContinueStatement() = default;
 		void Execute(ScriptContext& ctx) override {
 			ctx.DoContinue();
+		}
+		void Emit(ir::Emitter& em) override {
+			em.EmitOpLate(ir::Opcode::OP_Jmp, ir::Emitter::LateBindPointType::Continue);
 		}
 	};
 	class RangeForStatement : public Statement {
@@ -1209,7 +1461,8 @@ private:
 			}
 			return new AST::StatementBlock(statements);
 		}
-		return parseExpression();
+		auto expr = parseExpression();
+		return new AST::OutNullStatement(expr);
 	}
 
 	AST::Expression* parseExpression() {
@@ -1296,10 +1549,16 @@ private:
 			return new AST::NumberExpression(v);
 		}
 		else if (match(Lexer::TokenType::IntegerLiteral)) {
-			unsigned long long value = std::stoll(tokens_[position_ - 1].lexeme.data());
+			long long value = std::stoll(tokens_[position_ - 1].lexeme.data());
 			Variant v{};
-			v.Type = Variant::DataType::Long;
-			v.Long = value;
+			if (std::abs(value) <= INT_MAX) {
+				v.Type = Variant::DataType::Int;
+				v.Int = value;
+			}
+			else {
+				v.Type = Variant::DataType::Long;
+				v.Long = value;
+			}
 			return new AST::NumberExpression(v);
 		}
 		else if (match(Lexer::TokenType::StringLiteral)) {

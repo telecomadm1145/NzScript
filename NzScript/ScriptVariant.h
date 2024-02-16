@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "ScriptGC.h"
 struct Variant {
 	using ScriptInternMethod = struct Variant (*)(class ScriptContext&, std::vector<struct Variant>&);
@@ -36,7 +36,7 @@ struct Variant {
 		String,
 		VariantPtr_NotUsed,
 	} Type;
-	std::string ToString();
+	std::string ToString() const;
 	operator bool() {
 		if (Type == DataType::Null)
 			return false;
@@ -208,7 +208,7 @@ template <>
 std::string script_cast(Variant v) {
 	return v.ToString();
 }
-std::string Variant::ToString() {
+std::string Variant::ToString() const {
 	switch (Type) {
 	case DataType::Null:
 		return "Null";
@@ -267,3 +267,113 @@ std::string Variant::ToString() {
 		return "Unknown";
 	}
 }
+
+#define AUTO_OPDEF(x)                                                                         \
+	Variant operator##x##(const Variant& lft, const Variant& rht) {                           \
+		if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) { \
+			return Variant{                                                                   \
+				script_cast<double>(lft)##x##script_cast<double>(rht)                         \
+			};                                                                                \
+		}                                                                                     \
+		if (lft.Type == Variant::DataType::Float || rht.Type == Variant::DataType::Float) {   \
+			return Variant{                                                                   \
+				script_cast<float>(lft)##x##script_cast<float>(rht)                           \
+			};                                                                                \
+		}                                                                                     \
+		if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {     \
+			return Variant{                                                                   \
+				script_cast<long long>(lft)##x##script_cast<long long>(rht)                   \
+			};                                                                                \
+		}                                                                                     \
+		if (lft.Type == Variant::DataType::Int || rht.Type == Variant::DataType::Int) {       \
+			return Variant{                                                                   \
+				script_cast<int>(lft)##x##script_cast<int>(rht)                               \
+			};                                                                                \
+		}                                                                                     \
+		throw std::runtime_error("Cannot convert.");                                          \
+	}
+#define AUTO_OPDEF2(x)                                                                    \
+	Variant operator##x##(const Variant& lft, const Variant& rht) {                       \
+		if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) { \
+			return Variant{                                                               \
+				script_cast<long long>(lft)##x##script_cast<long long>(rht)               \
+			};                                                                            \
+		}                                                                                 \
+		if (lft.Type == Variant::DataType::Int || rht.Type == Variant::DataType::Int) {   \
+			return Variant{                                                               \
+				script_cast<int>(lft)##x##script_cast<int>(rht)                           \
+			};                                                                            \
+		}                                                                                 \
+		throw std::runtime_error("Cannot convert.");                                      \
+	}
+#define AUTO_OPDEF3(x)                               \
+	Variant operator##x##(Variant& lft) {            \
+		if (lft.Type == Variant::DataType::Double) { \
+			return Variant{                          \
+				x##lft.Double                        \
+			};                                       \
+		}                                            \
+		if (lft.Type == Variant::DataType::Float) {  \
+			return Variant{                          \
+				x##lft.Float                         \
+			};                                       \
+		}                                            \
+		if (lft.Type == Variant::DataType::Long) {   \
+			return Variant{                          \
+				x##lft.Long                          \
+			};                                       \
+		}                                            \
+		if (lft.Type == Variant::DataType::Int) {    \
+			return Variant{                          \
+				x##lft.Int                           \
+			};                                       \
+		}                                            \
+		throw std::runtime_error("Cannot convert."); \
+	}
+#define AUTO_OPDEF4(x)                               \
+	Variant operator##x##(const Variant& lft) {      \
+		if (lft.Type == Variant::DataType::Double) { \
+			return Variant{                          \
+				x##lft.Double                        \
+			};                                       \
+		}                                            \
+		if (lft.Type == Variant::DataType::Float) {  \
+			return Variant{                          \
+				x##lft.Float                         \
+			};                                       \
+		}                                            \
+		if (lft.Type == Variant::DataType::Long) {   \
+			return Variant{                          \
+				x##lft.Long                          \
+			};                                       \
+		}                                            \
+		if (lft.Type == Variant::DataType::Int) {    \
+			return Variant{                          \
+				x##lft.Int                           \
+			};                                       \
+		}                                            \
+		throw std::runtime_error("Cannot convert."); \
+	}
+
+AUTO_OPDEF(+)
+AUTO_OPDEF(-)
+AUTO_OPDEF(*)
+AUTO_OPDEF(/)
+AUTO_OPDEF2(^)
+AUTO_OPDEF2(&)
+AUTO_OPDEF2(&&)
+AUTO_OPDEF2(|)
+AUTO_OPDEF2(||)
+AUTO_OPDEF(==)
+AUTO_OPDEF(!=)
+AUTO_OPDEF(<)
+AUTO_OPDEF(>)
+AUTO_OPDEF(<=)
+AUTO_OPDEF(>=)
+AUTO_OPDEF3(++)
+AUTO_OPDEF3(--)
+AUTO_OPDEF4(-)
+
+
+#undef AUTO_OPDEF
+#undef AUTO_OPDEF2

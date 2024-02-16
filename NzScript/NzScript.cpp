@@ -11,13 +11,14 @@
 
 #include <thread>
 #include <windows.h>
+#include "ScriptJit.h"
 
 void startup() {
 	auto hstdin = GetStdHandle(STD_INPUT_HANDLE);
 	unsigned long mode = 0;
 	GetConsoleMode(hstdin, &mode);
 	mode = (mode | ENABLE_MOUSE_INPUT) & (~ENABLE_QUICK_EDIT_MODE);
-	SetConsoleMode(hstdin, mode);
+	//SetConsoleMode(hstdin, mode);
 	auto hstdout = GetStdHandle(STD_OUTPUT_HANDLE);
 	GetConsoleMode(hstdout, &mode);
 	mode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
@@ -34,7 +35,6 @@ void doExecute(auto exp, auto& ctx) {
 	}
 }
 int main() {
-	startup();
 	std::string undobuf = "";
 	std::string inputbuf = "";
 	int cursor = 0;
@@ -44,6 +44,21 @@ int main() {
 	ScriptContext ctx{};
 	LoadBasic(ctx);
 	LoadCMath(ctx);
+	//{
+	//	ir::Emitter emit{};
+	//	emit.EmitOp(ir::OP_PushI4, 1);
+	//	emit.EmitOp(ir::OP_PushVar, "print");
+	//	emit.EmitOpI1(ir::OP_Call, 1);
+	//	emit.EmitOp(ir::OP_PushVar, "print");
+	//	emit.EmitOpI1(ir::OP_Call, 1);
+	//	emit.EmitOp(ir::OP_PushVar, "print");
+	//	emit.EmitOpI1(ir::OP_Call, 1);
+	//	emit.EmitOp(ir::OP_RetNull);
+	//	ir::Interpreter ip{ emit.Bytes, { emit.Strings.begin(), emit.Strings.end() } };
+	//	ip.Run(ctx);
+	//	return 0;
+	//}
+	startup();
 	ctx.PushFrame("main");
 	GameBuffer buf{ [](const char* buf, size_t sz) {
 		std::cout.write(buf, sz);
@@ -239,7 +254,7 @@ int main() {
 			cury = cy;
 		}
 		buf.Output();
-		std::cout << "\u001b[" << cury + 1 << ";" << curx + 1 << "H";
+		std::cout << std::dec << "\u001b[" << cury + 1 << ";" << curx + 1 << "H";
 		while (true) {
 			if (cury >= csbi.dwSize.Y - 1) {
 				scrolly -= 5;
@@ -363,13 +378,25 @@ int main() {
 							std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
 							errorToken = p.GetPos();
 						}
-						if (exp != 0)
+
+						if (exp != 0) {
+							ir::Emitter em;
+							exp->Emit(em);
+							ir::Interpreter ir(em.Bytes, { em.Strings.begin(), em.Strings.end() });
 							try {
-								doExecute(exp, ctx);
+								ir.Disasm();
+								ir.Run(ctx);
 							}
 							catch (std::exception& ex) {
-								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
+								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n" << ir.GetPC();
 							}
+						}
+						// try {
+						//	doExecute(exp, ctx);
+						// }
+						// catch (std::exception& ex) {
+						//	std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
+						// }
 						if (exp != 0)
 							delete exp;
 						ctx.gc.Collect();
