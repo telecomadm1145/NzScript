@@ -61,12 +61,12 @@ struct PixelData {
 class GameBuffer {
 private:
 	std::vector<PixelData> PixelBuffer;
-	int o_w;
-	int o_h;
+	int o_w = 0;
+	int o_h = 0;
 
 public:
-	int Width;
-	int Height;
+	int Width = 0;
+	int Height = 0;
 	std::function<void(const char*, size_t)> write;
 	template <class func>
 	GameBuffer(func write) : write(write) {
@@ -87,7 +87,6 @@ private:
 public:
 	void ResizeBuffer(int width, int height);
 	void HideCursor();
-	int curx, cury;
 
 public:
 	void InitConsole();

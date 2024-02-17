@@ -19,6 +19,7 @@ struct Variant {
 		double Double;
 		GCObject* Object;
 		ScriptInternMethod InternMethod;
+		size_t PC;
 		// Variant* VariantPtr;
 	};
 	enum class DataType {
@@ -35,7 +36,9 @@ struct Variant {
 		InternMethod,
 		String,
 		VariantPtr_NotUsed,
-	} Type;
+		ReturnPC,
+		FuncPC,
+	} Type =  DataType::Null;
 	std::string ToString() const;
 	operator bool() {
 		if (Type == DataType::Null)
@@ -70,20 +73,6 @@ public:
 		return Fields[s];
 	}
 };
-namespace AST {
-	class ScriptMethod : public ScriptObject {
-	public:
-		std::vector<std::string> Args;
-		std::vector<class Statement*> Statements;
-		ScriptMethod(GC& gc, std::vector<std::string> Args,
-			std::vector<class Statement*> Statements) : Args(Args), Statements(Statements), ScriptObject(gc) {
-		}
-		const std::type_info& GetType() const noexcept override {
-			return typeid(ScriptMethod);
-		}
-	};
-}
-using ScriptMethod = AST::ScriptMethod;
 class ScriptArray : public ScriptObject {
 public:
 	std::vector<Variant> Variants;
@@ -128,6 +117,8 @@ template <class T>
 T script_cast(Variant);
 template <class T>
 Variant script_cast(T);
+#pragma warning(push)
+#pragma warning(disable:4244)
 template <>
 int script_cast(Variant v) {
 	switch (v.Type) {
@@ -246,17 +237,6 @@ std::string Variant::ToString() const {
 			s += "]";
 			return s;
 		}
-		if (typ == typeid(ScriptMethod)) {
-			std::string s = "{Method(";
-			for (auto p : ((ScriptMethod*)Object)->Args) {
-				s += p;
-				s += ",";
-			}
-			if (s.size() != 1)
-				s.erase(s.end() - 1);
-			s += ")}";
-			return s;
-		}
 		return "Unknown";
 	}
 	case DataType::InternMethod:
@@ -267,6 +247,7 @@ std::string Variant::ToString() const {
 		return "Unknown";
 	}
 }
+#pragma warning(pop)
 
 #define AUTO_OPDEF(x)                                                                         \
 	Variant operator##x##(const Variant& lft, const Variant& rht) {                           \

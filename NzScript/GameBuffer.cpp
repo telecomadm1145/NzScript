@@ -1,5 +1,8 @@
 ﻿#include "GameBuffer.h"
 #include <concepts>
+
+#pragma warning(disable:4244)
+
 template <std::integral Int, typename CharT>
 inline void itoa_2(Int num, CharT* out) {
 	int j = 0;

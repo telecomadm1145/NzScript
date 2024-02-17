@@ -19,7 +19,7 @@ public:
 		Break,
 		Continue,
 	};
-	ScriptStatus Status;
+	ScriptStatus Status = ScriptStatus::Normal;
 	GC gc;
 	ScriptContext() {
 		InternalConstants["null"] = {};

@@ -13,8 +13,7 @@ namespace AST {
 		virtual void Execute(ScriptContext& ctx) = 0;
 		virtual ~Statement() = default;
 		virtual void Emit(ir::Emitter& em) {
-			em.EmitOp(ir::Opcode::OP_Nop);
-			// throw std::exception("Invalid operation.");
+			throw std::exception("Invalid operation.");
 		}
 	};
 
@@ -37,7 +36,7 @@ namespace AST {
 			for (auto stat : statements_) {
 				stat->Emit(e);
 			}
-			e.EmitOp(ir::Opcode::OP_RetNull);
+			e.EmitOp(ir::Opcode::OP_Brk);
 		}
 
 	private:
@@ -70,16 +69,27 @@ namespace AST {
 	class LambdaExpression : public Expression {
 	public:
 		Variant Eval(ScriptContext& ctx) override {
-			Variant v{};
-			v.Type = Variant::DataType::Object;
-			auto mtd = new ScriptMethod(ctx.gc, Params, Statements);
-			v.Object = mtd;
-			return v;
+			return {};
 		}
 		std::vector<std::string> Params;
 		std::vector<Statement*> Statements;
 		LambdaExpression(std::vector<std::string> Params, std::vector<Statement*> Statements)
 			: Params(Params), Statements(Statements) {}
+		void Emit(ir::Emitter& em) override {
+			auto beg = em.Bytes.size();
+			em.EmitOp(ir::Opcode::OP_Jmp, 0);
+			auto func_start = em.Bytes.size();
+			for (size_t i = 0; i < Params.size(); i++) {
+				em.EmitOp(ir::Opcode::OP_PopVar, Params[i]);
+			}
+			for (auto exp : Statements) {
+				exp->Emit(em);
+			}
+			em.EmitOp(ir::Opcode::OP_RetNull);
+			auto end = em.Bytes.size();
+			em.Modify(&em.Bytes[beg + 1], (int)(end - beg) - 5);
+			em.EmitOp(ir::Opcode::OP_PushFuncPtr, (int)func_start);
+		}
 	};
 	class VariantRefExpression : public Expression {
 	public:
@@ -689,7 +699,6 @@ namespace AST {
 			return {};
 		}
 		void EmitSet(ir::Emitter& em, Expression* expr) override {
-
 		}
 		void Emit(ir::Emitter& em) override {
 			switch (op) {
@@ -845,6 +854,7 @@ namespace AST {
 					}
 					return arr->Get(ind);
 				}
+				break;
 			}
 			default:
 				break;
@@ -893,25 +903,6 @@ namespace AST {
 			if (left.Type == Variant::DataType::InternMethod) {
 				return left.InternMethod(ctx, vars);
 			}
-			if (left.Type == Variant::DataType::Object && left.Object->GetType() == typeid(ScriptMethod)) {
-				auto mtd = (ScriptMethod*)left.Object;
-				ctx.PushFrame("ScriptMethod");
-				ctx.SetFunctionVar("_this", left);
-				for (size_t i = 0; i < std::min(mtd->Args.size(), vars.size()); i++) {
-					ctx.SetFunctionVar(mtd->Args[i], vars[i]);
-				}
-				for (auto s : mtd->Statements) {
-					s->Execute(ctx);
-					if (ctx.Status == ScriptContext::ScriptStatus::Return) {
-						ctx.ResetStatus();
-						ctx.PopFrame();
-						return ctx.ReturnedVal;
-					}
-					ctx.ResetStatus();
-				}
-				ctx.PopFrame();
-				return {};
-			}
 			throw std::exception("Left is not Callable.");
 			return {};
 		}
@@ -920,7 +911,7 @@ namespace AST {
 				arg->Emit(em);
 			}
 			method->Emit(em);
-			em.EmitOpI1(ir::Opcode::OP_Call, arguments.size());
+			em.EmitOpI1(ir::Opcode::OP_Call, static_cast<unsigned char>(arguments.size()));
 		}
 		~CallExpression() {
 			if (method != 0)
@@ -1109,9 +1100,28 @@ namespace AST {
 			else
 				ctx.DoReturn({});
 		}
+		void Emit(ir::Emitter& em) override {
+			if (expression_ != 0) {
+				expression_->Emit(em);
+				em.EmitOp(ir::Opcode::OP_Ret);
+			}
+			else {
+				em.EmitOp(ir::Opcode::OP_RetNull);
+			}
+		}
 
 	private:
 		Expression* expression_;
+	};
+	class BreakpointStatement : public Statement {
+	public:
+		void Execute(ScriptContext& ctx) override {
+			throw std::runtime_error("breakpoint");
+		}
+
+		void Emit(ir::Emitter& em) override {
+			em.EmitOp(ir::Opcode::OP_Err);
+		}
 	};
 	class IfStatement : public Statement {
 	public:
@@ -1144,7 +1154,7 @@ namespace AST {
 			condition_->Emit(em);
 			auto beg = em.Bytes.size();
 			// je [elseBranch]
-			em.EmitOp(ir::Opcode::OP_Jz, 0);
+			em.EmitOp(ir::Opcode::OP_Jnz, 0);
 			thenStatement_->Emit(em);
 			auto el = em.Bytes.size();
 			if (elseStatement_ != 0) {
@@ -1193,7 +1203,7 @@ namespace AST {
 			auto beg = em.Bytes.size();
 			condition_->Emit(em);
 			auto branch = em.Bytes.size();
-			em.EmitOp(ir::Opcode::OP_Jz, 0);
+			em.EmitOp(ir::Opcode::OP_Jnz, 0);
 			auto binds = em.LateBinds;
 			Statements->Emit(em);
 			auto end = em.Bytes.size();
@@ -1242,6 +1252,23 @@ namespace AST {
 					break;
 			}
 		}
+		void Emit(ir::Emitter& em) override {
+			startExpression_->Emit(em);
+			auto beg = em.Bytes.size();
+			endExpression_->Emit(em);
+			auto branch = em.Bytes.size();
+			em.EmitOp(ir::Opcode::OP_Jnz, 0);
+			auto binds = em.LateBinds;
+			bodyStatement_->Emit(em);
+			stepExpression_->Emit(em);
+			em.EmitOp(ir::Opcode::OP_Pop);
+			auto end = em.Bytes.size();
+			em.EmitOp(ir::Opcode::OP_Jmp, -(int)(end - beg) - 5);
+			auto end2 = em.Bytes.size();
+			em.Modify(em.Bytes.begin() + branch + 1, (int)(end2 - branch) - 5);
+			em.EvalLateBinds(end2, beg);
+			em.LateBinds = binds;
+		}
 
 	private:
 		Expression* startExpression_;
@@ -1260,6 +1287,10 @@ namespace AST {
 		void Execute(ScriptContext& ctx) override {
 			auto str = expression_->Eval(ctx).ToString();
 			throw std::exception(str.c_str());
+		}
+		void Emit(ir::Emitter& em) override {
+			expression_->Emit(em);
+			em.EmitOp(ir::Opcode::OP_Throw);
 		}
 
 	private:
@@ -1360,6 +1391,20 @@ namespace AST {
 			}
 		}
 
+		void Emit(ir::Emitter& em) override {
+			rangeExpression->Emit(em);
+			em.EmitOp(ir::Opcode::OP_PushVar, "?nzscript_foreach_in@" + varname + "$");
+			auto beg = em.Bytes.size();
+			em.EmitOp(ir::Opcode::OP_MoveNext, varname);
+			auto mid = em.Bytes.size();
+			em.EmitOpLate(ir::Opcode::OP_Jz, ir::Emitter::LateBindPointType::Break);
+			bodyStatement_->Emit(em);
+			auto end = em.Bytes.size();
+			em.EmitOp(ir::Opcode::OP_Jmp, -(int)(end - beg) - 5);
+			auto end2 = em.Bytes.size();
+			em.EvalLateBinds(end2, beg);
+		}
+
 	private:
 		std::string varname;
 		Expression* rangeExpression;
@@ -1399,6 +1444,9 @@ private:
 		if (match(Lexer::TokenType::Identifier, "return")) {
 			AST::Expression* expression = parseExpression();
 			return new AST::ReturnStatement(expression);
+		}
+		else if (match(Lexer::TokenType::Identifier, "debugbreak")) {
+			return new AST::BreakpointStatement();
 		}
 		else if (match(Lexer::TokenType::Identifier, "break")) {
 			return new AST::BreakStatement();
@@ -1553,7 +1601,7 @@ private:
 			Variant v{};
 			if (std::abs(value) <= INT_MAX) {
 				v.Type = Variant::DataType::Int;
-				v.Int = value;
+				v.Int = static_cast<int>(value);
 			}
 			else {
 				v.Type = Variant::DataType::Long;

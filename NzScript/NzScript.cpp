@@ -18,7 +18,7 @@ void startup() {
 	unsigned long mode = 0;
 	GetConsoleMode(hstdin, &mode);
 	mode = (mode | ENABLE_MOUSE_INPUT) & (~ENABLE_QUICK_EDIT_MODE);
-	//SetConsoleMode(hstdin, mode);
+	// SetConsoleMode(hstdin, mode);
 	auto hstdout = GetStdHandle(STD_OUTPUT_HANDLE);
 	GetConsoleMode(hstdout, &mode);
 	mode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
@@ -97,7 +97,9 @@ int main() {
 			auto clr = PredefinedColor::None;
 			switch (tok.type) {
 			case Lexer::TokenType::Identifier: {
-				if (tok.lexeme == "function" || tok.lexeme == "var") {
+				if (tok.lexeme == "function" ||
+					tok.lexeme == "var" ||
+					tok.lexeme == "debugbreak") {
 					clr = PredefinedColor::Keyword;
 					break;
 				}
@@ -112,7 +114,8 @@ int main() {
 					tok.lexeme == "continue" ||
 					tok.lexeme == "return" ||
 					tok.lexeme == "else" ||
-					tok.lexeme == "foreach") {
+					tok.lexeme == "foreach" ||
+					tok.lexeme == "throw") {
 					clr = PredefinedColor::Ctrlflow;
 					break;
 				}
@@ -134,20 +137,14 @@ int main() {
 				}
 				auto& topFrame = ctx.FunctionStack.top();
 				if (topFrame.Variants.find(std::string(tok.lexeme)) != topFrame.Variants.end()) {
-					auto v = topFrame.Variants[std::string(tok.lexeme)];
-					switch (v.Type) {
-					case Variant::DataType::Object: {
-						if (v.Object->GetType() == typeid(AST::ScriptMethod)) {
-							clr = PredefinedColor::Function;
-							break;
-						}
-						break;
-					}
-					default: {
-						clr = PredefinedColor::LocalVariable;
-						break;
-					}
-					}
+					//auto v = topFrame.Variants[std::string(tok.lexeme)];
+					//switch (v.Type) {
+					//default: {
+					//	clr = PredefinedColor::LocalVariable;
+					//	break;
+					//}
+					//}
+					clr = PredefinedColor::LocalVariable;
 					break;
 				}
 				clr = PredefinedColor::LocalVariable;
@@ -340,7 +337,7 @@ int main() {
 			}
 			case VK_END: {
 				if ((ir.Event.KeyEvent.dwControlKeyState & 0x4) || (ir.Event.KeyEvent.dwControlKeyState & 0x8)) {
-					cursor = inputbuf.size() - 1;
+					cursor = static_cast<int>(inputbuf.size() - 1);
 					continue;
 				}
 				while (cursor < inputbuf.size()) {
@@ -376,19 +373,26 @@ int main() {
 						}
 						catch (std::exception& ex) {
 							std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
-							errorToken = p.GetPos();
+							errorToken = static_cast<int>(p.GetPos());
 						}
-
+						LARGE_INTEGER l{};
+						QueryPerformanceFrequency(&l);
 						if (exp != 0) {
 							ir::Emitter em;
 							exp->Emit(em);
 							ir::Interpreter ir(em.Bytes, { em.Strings.begin(), em.Strings.end() });
 							try {
 								ir.Disasm();
+								LARGE_INTEGER li{};
+								QueryPerformanceCounter(&li);
 								ir.Run(ctx);
+								LARGE_INTEGER li2{};
+								QueryPerformanceCounter(&li2);
+								std::cout << "\nUsed:" << (double)(li2.QuadPart - li.QuadPart) / l.QuadPart * 1000.0 << "\n";
 							}
 							catch (std::exception& ex) {
-								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n" << ir.GetPC();
+								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n"
+										  << ir.GetPC();
 							}
 						}
 						// try {
@@ -406,7 +410,7 @@ int main() {
 					continue;
 				}
 				int indent = 0;
-				int instr = 0;
+				bool instr = 0;
 				for (size_t i = 0; i < cursor; i++) {
 					if (!instr && inputbuf[i] == '{') {
 						indent++;

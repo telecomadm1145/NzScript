@@ -67,6 +67,8 @@ namespace ir {
 		OP_PushI8,
 		OP_PushFP4,
 		OP_PushFP8,
+		//
+		OP_PushFuncPtr,
 		// str
 		OP_PushStr,
 		// str
@@ -74,6 +76,7 @@ namespace ir {
 		OP_Pop,
 		// Pop certain values.(imm1)
 		OP_Popn,
+		OP_PopVar,
 		// Store the stack top value to certain variable
 		OP_StoreVar,
 		// Store the stack top value to certain variable
@@ -105,6 +108,12 @@ namespace ir {
 		OP_Jz,
 		// Jump if not Equal.
 		OP_Jnz,
+
+		OP_Brk,
+		OP_Err,
+		OP_Throw,
+		OP_MoveNext,
+		OP_BeginFor,
 
 		// Print stack top(debug)
 		OP_Print = 0xfb,
@@ -213,6 +222,18 @@ namespace ir {
 			return "PushI4.1";
 		case ir::OP_PushI4_0:
 			return "PushI4.0";
+		case ir::OP_PopVar:
+			return "Pop";
+		case ir::OP_PushFuncPtr:
+			return "PushFunc";
+		case ir::OP_Brk:
+			return "Brk";
+		case ir::OP_Err:
+			return "DEBUGBREAK";
+		case ir::OP_Throw:
+			return "Throw";
+		case ir::OP_MoveNext:
+			return "MoveNext";
 		default:
 			return "Unknown";
 		}
@@ -256,8 +277,7 @@ namespace ir {
 				}
 				i++;
 			}
-			if (!found)
-			{
+			if (!found) {
 				Strings.push_back(str);
 				Emit((int)Strings.size() - 1);
 				return;
