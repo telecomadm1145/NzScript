@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "ScriptVariant.h"
 #include <stack>
+#include <map>
 using ScriptInternMethod = Variant::ScriptInternMethod;
 class ScriptContext {
 public:
@@ -8,10 +9,9 @@ public:
 	std::unordered_map<std::string, Variant> InternalConstants;
 	std::unordered_map<std::string, Variant> GlobalVars;
 	struct FunctionStackInfo {
-		std::string FunctionName;
-		std::unordered_map<std::string, Variant> Variants;
+		std::map<std::string, Variant> Variants;
 	};
-	std::stack<FunctionStackInfo> FunctionStack;
+	std::stack<FunctionStackInfo,std::vector<FunctionStackInfo>> FunctionStack;
 	Variant ReturnedVal{};
 	enum class ScriptStatus {
 		Normal,
@@ -51,13 +51,13 @@ public:
 	}
 
 	void PushFrame(std::string name) {
-		FunctionStack.push({ name, {} });
+		FunctionStack.push({});
 	}
 	void AddConstant(std::string name, Variant v) {
 		InternalConstants[name] = v;
 	}
 	void SetGlobalVar(std::string name, Variant v) {
-		if (InternalConstants.find(name) == InternalConstants.end()) // Constants are not allowed to be modified OwO
+		if (InternalConstants.find(name) == InternalConstants.end())
 		{
 			auto& v2 = GlobalVars[name];
 			if (v2.Type == Variant::DataType::Object || v2.Type == Variant::DataType::String)

@@ -335,6 +335,20 @@ std::string Variant::ToString() const {
 		}                                            \
 		throw std::runtime_error("Cannot convert."); \
 	}
+#define AUTO_OPDEF5(x)                               \
+	Variant operator##x##(const Variant& lft) {      \
+		if (lft.Type == Variant::DataType::Long) {   \
+			return Variant{                          \
+				x##lft.Long                          \
+			};                                       \
+		}                                            \
+		if (lft.Type == Variant::DataType::Int) {    \
+			return Variant{                          \
+				x##lft.Int                           \
+			};                                       \
+		}                                            \
+		throw std::runtime_error("Cannot convert."); \
+	}
 
 AUTO_OPDEF(+)
 AUTO_OPDEF(-)
@@ -354,6 +368,7 @@ AUTO_OPDEF(>=)
 AUTO_OPDEF3(++)
 AUTO_OPDEF3(--)
 AUTO_OPDEF4(-)
+AUTO_OPDEF5(~)
 
 
 #undef AUTO_OPDEF

@@ -12,42 +12,76 @@
 namespace ir {
 	// This impls a simple stack.
 	class SimpStack {
-	public:
-		std::deque<Variant> container;
+		Variant* ptr = 0;
+		size_t stack_i;
+		size_t stack_size;
 		Variant n;
-		[[msvc::noinline]] void clear() {
-			container.clear();
+
+	public:
+		SimpStack() {
+			clear_and_resize(16384);
+		}
+		~SimpStack() {
+			delete[] ptr;
+		}
+		void clear_and_resize(size_t sz) {
+			if (ptr != nullptr)
+				delete[] ptr;
+			stack_size = sz;
+			stack_i = 0;
+			ptr = new Variant[stack_size];
+		}
+		void resize(size_t sz) {
+			stack_i = sz;
+		}
+		void clear() {
+			stack_i = 0;
 		}
 		[[msvc::noinline]] Variant top() {
-			Variant v = container.back();
+			if (stack_i == 0)
+				return n = {};
+			Variant v = ptr[stack_i - 1];
 			if (v.Type == Variant::DataType::ReturnPC)
 				return n = {};
-			container.pop_back();
+			stack_i--;
 			return v;
 		}
-		[[msvc::noinline]] Variant top_r() {
-			Variant v = container.back();
-			container.pop_back();
+		Variant top_r() {
+			if (stack_i == 0)
+				return n = {};
+			Variant v = ptr[--stack_i];
 			return v;
 		}
-		[[msvc::noinline]] Variant& top_p() {
-			decltype(auto) v = container.back();
+		Variant& top_p() {
+			if (stack_i == 0)
+				return n = {};
+			Variant& v = ptr[stack_i - 1];
 			if (v.Type == Variant::DataType::ReturnPC)
 				return n = {};
 			return v;
 		}
-		[[msvc::noinline]] void pop() {
-			container.pop_back();
+		void pop() {
+			stack_i--;
 		}
-		[[msvc::noinline]] void push(const Variant& v) {
-			container.push_back(v);
+		void push(const Variant& v) {
+			ptr[stack_i++] = v;
+			if (stack_i >= stack_size)
+				throw std::runtime_error("Stack overflow.");
+		}
+		size_t size() {
+			return stack_i;
+		}
+		Variant* begin() {
+			return &ptr[0];
+		}
+		Variant* end() {
+			return &ptr[stack_i];
 		}
 	};
 	class Interpreter {
 	public:
 		Interpreter(const std::vector<char>& bytes, const std::vector<std::string>& strings)
 			: Bytes(bytes), Strings(strings) {}
-
 		void Run(ScriptContext& ctx) {
 			PC = 0;
 			while (PC < Bytes.size()) {
@@ -80,12 +114,38 @@ namespace ir {
 				case OP_Xor:
 					Stack.push(Stack.top() ^ Stack.top());
 					break;
-				case OP_GetProp:
-					// TODO: Implement
-					break;
-				case OP_SetProp:
-					// TODO: Implement
-					break;
+				case OP_GetProp: {
+					Variant obj = Stack.top();
+					auto str = Strings[Read<unsigned int>(Bytes, PC)];
+					if (obj.Type == Variant::DataType::Object) {
+						auto obj2 = obj.Object;
+						if (obj2->GetType() == typeid(ScriptObject)) {
+							auto obj3 = (ScriptObject*)obj2;
+							Stack.push(obj3->Get(str));
+						}
+						else
+							throw std::runtime_error("Left must be object.");
+					}
+					else
+						throw std::runtime_error("Left must be object.");
+				} break;
+				case OP_SetProp: {
+					Variant right = Stack.top();
+					Variant obj = Stack.top();
+					auto str = Strings[Read<unsigned int>(Bytes, PC)];
+					if (obj.Type == Variant::DataType::Object) {
+						auto obj2 = obj.Object;
+						if (obj2->GetType() == typeid(ScriptObject)) {
+							auto obj3 = (ScriptObject*)obj2;
+							obj3->Set(str, right);
+							Stack.push(right);
+						}
+						else
+							throw std::runtime_error("Left must be object.");
+					}
+					else
+						throw std::runtime_error("Left must be object.");
+				} break;
 				case OP_GetIndex:
 					// TODO: Implement
 					break;
@@ -133,9 +193,9 @@ namespace ir {
 					auto left = Stack.top();
 					std::vector<Variant> variants;
 					variants.resize(count);
-					auto sz = Stack.container.size() - count;
-					std::copy(Stack.container.begin() + (sz), Stack.container.end(), variants.begin());
-					Stack.container.resize(sz);
+					auto sz = Stack.size() - count;
+					std::copy(Stack.begin() + (sz), Stack.end(), variants.begin());
+					Stack.resize(sz);
 					if (left.Type == Variant::DataType::Null)
 						throw std::exception("Call on a null object.");
 					if (left.Type == Variant::DataType::InternMethod) {
@@ -203,11 +263,17 @@ namespace ir {
 				case OP_PopVar:
 					ctx.SetFunctionVar(Strings[static_cast<size_t>(Read<int32_t>(Bytes, PC))], Stack.top());
 					break;
-				case OP_RstStk:
-					Stack = {};
-					break;
+				// case OP_RstStk:
+				//	Stack = {};
+				//	break;
 				case OP_Neg:
 					Stack.push(-Stack.top());
+					break;
+				case OP_Not:
+					Stack.push(!Stack.top());
+					break;
+				case OP_Bnot:
+					Stack.push(~Stack.top());
 					break;
 				case OP_Inc:
 					Stack.push(Stack.top() + Variant{ 1 });
@@ -278,6 +344,8 @@ namespace ir {
 				case OP_StoreGlobalVar:
 				case OP_StoreVar:
 				case OP_PopVar:
+				case OP_GetProp:
+				case OP_SetProp:
 					exdesc = Strings[Read<unsigned int>(Bytes, PC)];
 					break;
 				case OP_PushFP4:

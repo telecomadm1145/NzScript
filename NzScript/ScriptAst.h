@@ -699,6 +699,17 @@ namespace AST {
 			return {};
 		}
 		void EmitSet(ir::Emitter& em, Expression* expr) override {
+			switch (op) {
+			case AST::BinOp::Member: {
+				leftExpression_->Emit(em);
+				expr->Emit(em);
+				auto r = rightExpression_->GetVariableName();
+				em.EmitOp(ir::Opcode::OP_SetProp, r);
+				return;
+			}
+			default:
+				throw std::runtime_error("Invalid Operation.");
+			}
 		}
 		void Emit(ir::Emitter& em) override {
 			switch (op) {
@@ -708,8 +719,7 @@ namespace AST {
 			case AST::BinOp::Member: {
 				leftExpression_->Emit(em);
 				auto r = rightExpression_->GetVariableName();
-				em.EmitOp(ir::Opcode::OP_PushStr, r);
-				em.EmitOp(ir::Opcode::OP_GetProp);
+				em.EmitOp(ir::Opcode::OP_GetProp, r);
 				return;
 			}
 			}
@@ -1585,12 +1595,10 @@ private:
 				identifier = tokens_[position_ - 1].lexeme;
 				return new AST::GlobalVariantRefExpression(std::string(identifier));
 			}
-			// TODO: Create an AST node for identifier expression
 			return new AST::VariantRefExpression(std::string(identifier));
 		}
 		else if (match(Lexer::TokenType::FloatLiteral)) {
 			double value = std::stod(tokens_[position_ - 1].lexeme.data());
-			// TODO: Create an AST node for number expression
 			Variant v{};
 			v.Type = Variant::DataType::Double;
 			v.Double = value;

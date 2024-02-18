@@ -63,6 +63,7 @@ int main() {
 	GameBuffer buf{ [](const char* buf, size_t sz) {
 		std::cout.write(buf, sz);
 	} };
+	int x;
 	// buf.InitConsole();
 	HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
 	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -380,19 +381,20 @@ int main() {
 						if (exp != 0) {
 							ir::Emitter em;
 							exp->Emit(em);
-							ir::Interpreter ir(em.Bytes, { em.Strings.begin(), em.Strings.end() });
+							ir::Interpreter ip(em.Bytes, { em.Strings.begin(), em.Strings.end() });
 							try {
-								ir.Disasm();
+								ip.Disasm();
 								LARGE_INTEGER li{};
 								QueryPerformanceCounter(&li);
-								ir.Run(ctx);
+								ip.Run(ctx);
 								LARGE_INTEGER li2{};
 								QueryPerformanceCounter(&li2);
 								std::cout << "\nUsed:" << (double)(li2.QuadPart - li.QuadPart) / l.QuadPart * 1000.0 << "\n";
 							}
 							catch (std::exception& ex) {
 								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n"
-										  << ir.GetPC();
+										  <<std::hex<< ip.GetPC()<<std::dec;
+								//const_cast<std::vector<ScriptContext::FunctionStackInfo>&>(ctx.FunctionStack._Get_container()).resize(1);
 							}
 						}
 						// try {
