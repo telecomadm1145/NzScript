@@ -27,9 +27,11 @@ namespace AST {
 			return statements_;
 		}
 		void Emit(ir::Emitter& e) {
+			e.EmitOpI1(ir::Opcode::OP_PushN, 0);
 			for (auto stat : statements_) {
 				stat->Emit(e);
 			}
+			e.Bytes[1] = e.LocalVariables.size();
 			e.EmitOp(ir::Opcode::OP_Brk);
 		}
 
@@ -62,15 +64,22 @@ namespace AST {
 		LambdaExpression(std::vector<std::string> Params, std::vector<Statement*> Statements)
 			: Params(Params), Statements(Statements) {}
 		void Emit(ir::Emitter& em) override {
+			// throw std::runtime_error("");
+			ir::Emitter em2{};
 			auto beg = em.Bytes.size();
 			em.EmitOp(ir::Opcode::OP_Jmp, 0);
+			em2.ctx = em.ctx;
+			em2.Arguments = Params;
+			em2.Strings = em.Strings;
+			em2.Bytes = em.Bytes;
 			auto func_start = em.Bytes.size();
-			for (size_t i = 0; i < Params.size(); i++) {
-				em.EmitOp(ir::Opcode::OP_PopVar, Params[i]);
-			}
+			em2.EmitOpI1(ir::Opcode::OP_PushN, 0);
 			for (auto exp : Statements) {
-				exp->Emit(em);
+				exp->Emit(em2);
 			}
+			em.Bytes = em2.Bytes;
+			em.Strings = em2.Strings;
+			em2.Bytes[func_start + 1] = em2.LocalVariables.size();
 			em.EmitOp(ir::Opcode::OP_RetNull);
 			auto end = em.Bytes.size();
 			em.Modify(&em.Bytes[beg + 1], (int)(end - beg) - 5);
@@ -92,12 +101,14 @@ namespace AST {
 			return VariantName;
 		}
 		void Emit(ir::Emitter& em) override {
-			em.EmitOp(ir::Opcode::OP_PushVar, VariantName);
+			// TODO: Lookup Variable
+			// em.EmitOp(ir::Opcode::OP_PushVar, VariantName);
+			em.EmitOpPushVar(VariantName);
 		}
 		void EmitSet(ir::Emitter& em, Expression* tgt) override {
 			if (tgt != 0)
 				tgt->Emit(em);
-			em.EmitOp(ir::Opcode::OP_StoreVar, VariantName);
+			em.EmitOpStoreVar(VariantName);
 		}
 	};
 	class GlobalVariantRefExpression : public Expression {
@@ -115,9 +126,13 @@ namespace AST {
 			ctx.SetGlobalVar(VariantName, v);
 		}
 		void Emit(ir::Emitter& em) override {
-			em.EmitOp(ir::Opcode::OP_PushVar, VariantName);
+			if (em.ctx != nullptr)
+				em.ctx->GlobalVars[VariantName];
+			em.EmitOp(ir::Opcode::OP_PushGlobalVar, VariantName);
 		}
 		void EmitSet(ir::Emitter& em, Expression* tgt) override {
+			if (em.ctx != nullptr)
+				em.ctx->GlobalVars[VariantName];
 			if (tgt != 0)
 				tgt->Emit(em);
 			em.EmitOp(ir::Opcode::OP_StoreGlobalVar, VariantName);
@@ -1205,20 +1220,6 @@ namespace AST {
 
 		Statement* getBodyStatement() const {
 			return bodyStatement_;
-		}
-
-		void Emit(ir::Emitter& em) override {
-			rangeExpression->Emit(em);
-			em.EmitOp(ir::Opcode::OP_PushVar, "?nzscript_foreach_in@" + varname + "$");
-			auto beg = em.Bytes.size();
-			em.EmitOp(ir::Opcode::OP_MoveNext, varname);
-			auto mid = em.Bytes.size();
-			em.EmitOpLate(ir::Opcode::OP_Jz, ir::Emitter::LateBindPointType::Break);
-			bodyStatement_->Emit(em);
-			auto end = em.Bytes.size();
-			em.EmitOp(ir::Opcode::OP_Jmp, -(int)(end - beg) - 5);
-			auto end2 = em.Bytes.size();
-			em.EvalLateBinds(end2, beg);
 		}
 
 	private:

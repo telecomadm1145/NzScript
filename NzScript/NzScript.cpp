@@ -365,10 +365,12 @@ int main() {
 						QueryPerformanceFrequency(&l);
 						if (exp != 0) {
 							ir::Emitter em;
+							em.ctx = &ctx;
 							exp->Emit(em);
 							ir::Interpreter ip(em.Bytes, { em.Strings.begin(), em.Strings.end() });
 							try {
 								ip.Disasm();
+								std::cout << "-------------------\n";
 								LARGE_INTEGER li{};
 								QueryPerformanceCounter(&li);
 								ip.Run(ctx);
@@ -379,15 +381,8 @@ int main() {
 							catch (std::exception& ex) {
 								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n"
 										  <<std::hex<< ip.GetPC()<<std::dec;
-								//const_cast<std::vector<ScriptContext::FunctionStackInfo>&>(ctx.FunctionStack._Get_container()).resize(1);
 							}
 						}
-						// try {
-						//	doExecute(exp, ctx);
-						// }
-						// catch (std::exception& ex) {
-						//	std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
-						// }
 						if (exp != 0)
 							delete exp;
 						ctx.gc.Collect();

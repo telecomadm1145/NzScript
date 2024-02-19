@@ -14,6 +14,18 @@ public:
 		InternalConstants["false"] = Variant{ 0 };
 		InternalConstants["true"] = Variant{ 1 };
 	}
+	bool GlobalExists(const std::string& name) {
+		if (InternalConstants.find(name) != InternalConstants.end()) {
+			return true;
+		}
+		if (InternalFunctions.find(name) != InternalFunctions.end()) {
+			return true;
+		}
+		if (GlobalVars.find(name) != GlobalVars.end()) {
+			return true;
+		}
+		return false;
+	}
 	Variant LookupGlobal(std::string name) {
 		if (InternalConstants.find(name) != InternalConstants.end()) {
 			return InternalConstants[name];
