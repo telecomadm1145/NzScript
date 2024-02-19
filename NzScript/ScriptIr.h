@@ -73,6 +73,10 @@ namespace ir {
 		OP_PushStr,
 		// str
 		OP_PushVar,
+		// nil
+		OP_PushNull,
+		// imm1
+		OP_PushArg,
 		OP_Pop,
 		// Pop certain values.(imm1)
 		OP_Popn,

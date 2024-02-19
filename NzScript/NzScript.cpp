@@ -59,12 +59,9 @@ int main() {
 	//	return 0;
 	//}
 	startup();
-	ctx.PushFrame("main");
 	GameBuffer buf{ [](const char* buf, size_t sz) {
 		std::cout.write(buf, sz);
 	} };
-	int x;
-	// buf.InitConsole();
 	HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
 	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -134,18 +131,6 @@ int main() {
 				}
 				if (j < tokens.size() - 1 && tokens[j + 1].lexeme == "(" && tokens[j + 1].type == Lexer::TokenType::Delimiter) {
 					clr = PredefinedColor::Function;
-					break;
-				}
-				auto& topFrame = ctx.FunctionStack.top();
-				if (topFrame.Variants.find(std::string(tok.lexeme)) != topFrame.Variants.end()) {
-					//auto v = topFrame.Variants[std::string(tok.lexeme)];
-					//switch (v.Type) {
-					//default: {
-					//	clr = PredefinedColor::LocalVariable;
-					//	break;
-					//}
-					//}
-					clr = PredefinedColor::LocalVariable;
 					break;
 				}
 				clr = PredefinedColor::LocalVariable;
@@ -495,5 +480,4 @@ int main() {
 			cursor++;
 		}
 	}
-	ctx.PopFrame();
 }

@@ -12,70 +12,95 @@
 namespace ir {
 	// This impls a simple stack.
 	class SimpStack {
-		Variant* ptr = 0;
-		size_t stack_i;
-		size_t stack_size;
-		Variant n;
+		Variant blank_val{};
 
 	public:
+		Variant* ptr = 0;
+		/// <summary>
+		/// 传入的参数
+		/// </summary>
+		size_t bp = 0;
+		/// <summary>
+		/// 本地变量
+		/// </summary>
+		size_t bp2 = 0;
+		size_t sp = 0;
+		size_t max;
+		/// <summary>
+		/// 新建一个栈
+		/// </summary>
 		SimpStack() {
 			clear_and_resize(16384);
 		}
+		/// <summary>
+		/// 清理栈
+		/// </summary>
 		~SimpStack() {
 			delete[] ptr;
 		}
+		/// <summary>
+		/// 重置并分配指定大小的栈
+		/// </summary>
+		/// <param name="sz">栈大小</param>
 		void clear_and_resize(size_t sz) {
 			if (ptr != nullptr)
 				delete[] ptr;
-			stack_size = sz;
-			stack_i = 0;
-			ptr = new Variant[stack_size];
+			max = sz;
+			sp = 0;
+			ptr = new Variant[max];
 		}
-		void resize(size_t sz) {
-			stack_i = sz;
+		/// <summary>
+		/// 重置SP到指定值
+		/// </summary>
+		/// <param name="sz">SP的新值</param>
+		void reset(size_t sz) {
+			sp = sz;
 		}
 		void clear() {
-			stack_i = 0;
+			sp = 0;
 		}
 		[[msvc::noinline]] Variant top() {
-			if (stack_i == 0)
-				return n = {};
-			Variant v = ptr[stack_i - 1];
+			if (sp == 0)
+				return blank_val;
+			Variant v = ptr[sp - 1];
 			if (v.Type == Variant::DataType::ReturnPC)
-				return n = {};
-			stack_i--;
+				return blank_val;
+			sp--;
 			return v;
 		}
 		Variant top_r() {
-			if (stack_i == 0)
-				return n = {};
-			Variant v = ptr[--stack_i];
+			if (sp == 0)
+				return blank_val;
+			Variant v = ptr[--sp];
 			return v;
 		}
 		Variant& top_p() {
-			if (stack_i == 0)
-				return n = {};
-			Variant& v = ptr[stack_i - 1];
+			if (sp == 0)
+				return blank_val = {};
+			Variant& v = ptr[sp - 1];
 			if (v.Type == Variant::DataType::ReturnPC)
-				return n = {};
+				return blank_val = {};
 			return v;
 		}
+		Variant& operator[](size_t i) {
+			return ptr[i];
+		}
 		void pop() {
-			stack_i--;
+			sp--;
 		}
 		void push(const Variant& v) {
-			ptr[stack_i++] = v;
-			if (stack_i >= stack_size)
+			ptr[sp++] = v;
+			if (sp >= max)
 				throw std::runtime_error("Stack overflow.");
 		}
 		size_t size() {
-			return stack_i;
+			return sp;
 		}
 		Variant* begin() {
 			return &ptr[0];
 		}
 		Variant* end() {
-			return &ptr[stack_i];
+			return &ptr[sp];
 		}
 	};
 	class Interpreter {
@@ -168,21 +193,10 @@ namespace ir {
 					Stack.push({ ctx.gc, Strings[script_cast<int>(Stack.top())].c_str() });
 					break;
 				case OP_Ret: {
-					auto retv = Stack.top();
-					auto v = Stack.top_r();
-					while (v.Type != Variant::DataType::ReturnPC)
-						v = Stack.top_r();
-					ctx.PopFrame(); // Pop the frame.
-					PC = v.PC;		// Jump.
-					Stack.push(retv);
+					// TODO
 				} break;
 				case OP_RetNull: {
-					auto v = Stack.top_r();
-					while (v.Type != Variant::DataType::ReturnPC)
-						v = Stack.top_r();
-					ctx.PopFrame(); // Pop the frame.
-					PC = v.PC;		// Jump.
-					Stack.push({});
+					// TODO
 				} break;
 				case OP_Brk:
 					return;
@@ -191,29 +205,19 @@ namespace ir {
 				case OP_Call: {
 					auto count = Read<unsigned char>(Bytes, PC);
 					auto left = Stack.top();
-					std::vector<Variant> variants;
-					variants.resize(count);
-					auto sz = Stack.size() - count;
-					std::copy(Stack.begin() + (sz), Stack.end(), variants.begin());
-					Stack.resize(sz);
 					if (left.Type == Variant::DataType::Null)
 						throw std::exception("Call on a null object.");
 					if (left.Type == Variant::DataType::InternMethod) {
+						std::vector<Variant> variants;
+						variants.resize(count);
+						auto sz = Stack.size() - count;
+						std::copy(Stack.begin() + (sz), Stack.end(), variants.begin());
+						Stack.reset(sz);
 						Stack.push(left.InternMethod(ctx, variants));
 						break;
 					}
 					if (left.Type == Variant::DataType::FuncPC) {
-						Variant v{};
-						v.Type = Variant::DataType::ReturnPC;
-						v.PC = PC;
-						Stack.push(v);
-						PC = left.PC;
-						ctx.PushFrame("ScriptMethod");
-						ctx.SetFunctionVar("_this", left);
-						if (variants.size() != 0)
-							for (int i = (int)variants.size() - 1; i >= 0; i--) {
-								Stack.push(variants[i]);
-							}
+						// TODO
 						break;
 					}
 					throw std::exception("Left is not Callable.");
@@ -245,8 +249,11 @@ namespace ir {
 				case OP_PushStr:
 					Stack.push({ ctx.gc, Strings[static_cast<size_t>(Read<int32_t>(Bytes, PC))].c_str() });
 					break;
+				case OP_PushNull:
+					Stack.push({});
+					break;
 				case OP_PushVar:
-					Stack.push(ctx.LookupGlobal(Strings[static_cast<size_t>(Read<int32_t>(Bytes, PC))]));
+					// TODO
 					break;
 				case OP_Pop:
 					Stack.pop();
@@ -258,14 +265,11 @@ namespace ir {
 					}
 				} break;
 				case OP_StoreVar:
-					ctx.SetFunctionVar(Strings[static_cast<size_t>(Read<int32_t>(Bytes, PC))], Stack.top_p());
+					// TODO
 					break;
 				case OP_PopVar:
-					ctx.SetFunctionVar(Strings[static_cast<size_t>(Read<int32_t>(Bytes, PC))], Stack.top());
+					// TODO
 					break;
-				// case OP_RstStk:
-				//	Stack = {};
-				//	break;
 				case OP_Neg:
 					Stack.push(-Stack.top());
 					break;

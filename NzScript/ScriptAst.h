@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "ScriptLexer.h"
 #include "ScriptVariant.h"
 #include "ScriptContext.h"
 #include "ScriptIr.h"
@@ -10,7 +11,6 @@ namespace AST {
 		Statement() = default;
 		Statement(const Statement&) = delete;
 		Statement(Statement&&) = delete;
-		virtual void Execute(ScriptContext& ctx) = 0;
 		virtual ~Statement() = default;
 		virtual void Emit(ir::Emitter& em) {
 			throw std::exception("Invalid operation.");
@@ -26,12 +26,6 @@ namespace AST {
 		std::vector<Statement*> getStatements() const {
 			return statements_;
 		}
-		void Execute(ScriptContext& ctx) {
-			for (auto stat : statements_) {
-				stat->Execute(ctx);
-				ctx.ResetStatus();
-			}
-		}
 		void Emit(ir::Emitter& e) {
 			for (auto stat : statements_) {
 				stat->Emit(e);
@@ -44,17 +38,11 @@ namespace AST {
 	};
 	class Expression : public Statement {
 	public:
-		void Execute(ScriptContext& ctx) override {
-			Eval(ctx);
-		}
 		virtual bool IsConst() {
 			return false;
 		}
 		virtual bool IsLeftValue() {
 			return false;
-		}
-		virtual void Set(ScriptContext& ctx, Variant) {
-			throw std::exception("Invalid operation.");
 		}
 		virtual Variant Eval(ScriptContext& ctx) = 0;
 		virtual std::string GetVariableName() {
@@ -62,8 +50,6 @@ namespace AST {
 		}
 		virtual void EmitSet(ir::Emitter& em, Expression* tgt) {
 			throw std::exception("Invalid operation.");
-		}
-		virtual void ReduceConstant() {
 		}
 	};
 	class LambdaExpression : public Expression {
@@ -101,9 +87,6 @@ namespace AST {
 		}
 		bool IsLeftValue() override {
 			return true;
-		}
-		void Set(ScriptContext& ctx, Variant v) {
-			ctx.SetFunctionVar(VariantName, v);
 		}
 		std::string GetVariableName() {
 			return VariantName;
@@ -238,9 +221,6 @@ namespace AST {
 	public:
 		OutNullStatement(Expression* expr) : expr(expr) {}
 		Expression* expr;
-		void Execute(ScriptContext& ctx) override {
-			expr->Eval(ctx);
-		}
 		void Emit(ir::Emitter& em) override {
 			expr->Emit(em);
 			em.EmitOp(ir::Opcode::OP_Pop);
@@ -392,14 +372,6 @@ namespace AST {
 				}
 
 				throw std::exception("Cannot promote a fit type.");
-			} break;
-			case AST::BinOp::Mov: {
-				if (!leftExpression_->IsLeftValue()) {
-					throw std::exception("");
-				}
-				Variant v = rightExpression_->Eval(ctx);
-				leftExpression_->Set(ctx, v);
-				return v;
 			} break;
 			case AST::BinOp::Member: {
 				auto l = leftExpression_->Eval(ctx);
@@ -1000,46 +972,6 @@ namespace AST {
 				}
 				throw std::exception("Bad input.");
 			} break;
-			case AST::UnOp::Increase: {
-				auto v = left->Eval(ctx);
-				if (v.Type == Variant::DataType::Double) {
-					left->Set(ctx, ++v.Double);
-					return v.Double;
-				}
-				if (v.Type == Variant::DataType::Float) {
-					left->Set(ctx, ++v.Float);
-					return v.Float;
-				}
-				if (v.Type == Variant::DataType::Int) {
-					left->Set(ctx, ++v.Int);
-					return v.Int;
-				}
-				if (v.Type == Variant::DataType::Long) {
-					left->Set(ctx, ++v.Long);
-					return v.Long;
-				}
-				throw std::exception("Bad input.");
-			} break;
-			case AST::UnOp::Decrease: {
-				auto v = left->Eval(ctx);
-				if (v.Type == Variant::DataType::Double) {
-					left->Set(ctx, --v.Double);
-					return v.Double;
-				}
-				if (v.Type == Variant::DataType::Float) {
-					left->Set(ctx, --v.Float);
-					return v.Float;
-				}
-				if (v.Type == Variant::DataType::Int) {
-					left->Set(ctx, --v.Int);
-					return v.Int;
-				}
-				if (v.Type == Variant::DataType::Long) {
-					left->Set(ctx, --v.Long);
-					return v.Long;
-				}
-				throw std::exception("Bad input.");
-			} break;
 			default:
 				break;
 			}
@@ -1080,13 +1012,6 @@ namespace AST {
 		StatementBlock(std::vector<Statement*> expression)
 			: expressions(expression) {}
 
-		void Execute(ScriptContext& ctx) override {
-			for (auto exp : expressions) {
-				exp->Execute(ctx);
-				if (!ctx.ShouldRun())
-					return;
-			}
-		}
 		void Emit(ir::Emitter& em) override {
 			for (auto exp : expressions) {
 				exp->Emit(em);
@@ -1104,12 +1029,6 @@ namespace AST {
 		Expression* getExpression() const {
 			return expression_;
 		}
-		void Execute(ScriptContext& ctx) override {
-			if (expression_ != 0)
-				ctx.DoReturn(expression_->Eval(ctx));
-			else
-				ctx.DoReturn({});
-		}
 		void Emit(ir::Emitter& em) override {
 			if (expression_ != 0) {
 				expression_->Emit(em);
@@ -1125,10 +1044,6 @@ namespace AST {
 	};
 	class BreakpointStatement : public Statement {
 	public:
-		void Execute(ScriptContext& ctx) override {
-			throw std::runtime_error("breakpoint");
-		}
-
 		void Emit(ir::Emitter& em) override {
 			em.EmitOp(ir::Opcode::OP_Err);
 		}
@@ -1149,17 +1064,6 @@ namespace AST {
 		Statement* getElseStatement() const {
 			return elseStatement_;
 		}
-		void Execute(ScriptContext& ctx) override {
-			if (condition_->Eval(ctx)) {
-				if (thenStatement_ != nullptr)
-					thenStatement_->Execute(ctx);
-			}
-			else {
-				if (elseStatement_ != nullptr)
-					elseStatement_->Execute(ctx);
-			}
-		}
-
 		void Emit(ir::Emitter& em) override {
 			condition_->Emit(em);
 			auto beg = em.Bytes.size();
@@ -1194,21 +1098,6 @@ namespace AST {
 			return condition_;
 		}
 
-		void Execute(ScriptContext& ctx) override {
-			while (condition_->Eval(ctx)) {
-				Statements->Execute(ctx);
-				if (ctx.Status == ScriptContext::ScriptStatus::Break) {
-					ctx.ResetStatus();
-					break;
-				}
-				if (ctx.Status == ScriptContext::ScriptStatus::Continue) {
-					ctx.ResetStatus();
-					continue;
-				}
-				if (!ctx.ShouldRun())
-					break;
-			}
-		}
 		void Emit(ir::Emitter& em) override {
 			auto beg = em.Bytes.size();
 			condition_->Emit(em);
@@ -1247,21 +1136,6 @@ namespace AST {
 		Statement* getBodyStatement() const {
 			return bodyStatement_;
 		}
-		void Execute(ScriptContext& ctx) override {
-			for (startExpression_->Eval(ctx); endExpression_->Eval(ctx); stepExpression_->Eval(ctx)) {
-				bodyStatement_->Execute(ctx);
-				if (ctx.Status == ScriptContext::ScriptStatus::Break) {
-					ctx.ResetStatus();
-					break;
-				}
-				if (ctx.Status == ScriptContext::ScriptStatus::Continue) {
-					ctx.ResetStatus();
-					continue;
-				}
-				if (!ctx.ShouldRun())
-					break;
-			}
-		}
 		void Emit(ir::Emitter& em) override {
 			startExpression_->Emit(em);
 			auto beg = em.Bytes.size();
@@ -1294,10 +1168,6 @@ namespace AST {
 		Expression* getExpression() const {
 			return expression_;
 		}
-		void Execute(ScriptContext& ctx) override {
-			auto str = expression_->Eval(ctx).ToString();
-			throw std::exception(str.c_str());
-		}
 		void Emit(ir::Emitter& em) override {
 			expression_->Emit(em);
 			em.EmitOp(ir::Opcode::OP_Throw);
@@ -1309,9 +1179,6 @@ namespace AST {
 	class BreakStatement : public Statement {
 	public:
 		BreakStatement() = default;
-		void Execute(ScriptContext& ctx) override {
-			ctx.DoBreak();
-		}
 		void Emit(ir::Emitter& em) override {
 			em.EmitOpLate(ir::Opcode::OP_Jmp, ir::Emitter::LateBindPointType::Break);
 		}
@@ -1319,9 +1186,6 @@ namespace AST {
 	class ContinueStatement : public Statement {
 	public:
 		ContinueStatement() = default;
-		void Execute(ScriptContext& ctx) override {
-			ctx.DoContinue();
-		}
 		void Emit(ir::Emitter& em) override {
 			em.EmitOpLate(ir::Opcode::OP_Jmp, ir::Emitter::LateBindPointType::Continue);
 		}
@@ -1341,64 +1205,6 @@ namespace AST {
 
 		Statement* getBodyStatement() const {
 			return bodyStatement_;
-		}
-
-		void Execute(ScriptContext& ctx) override {
-			auto rng = rangeExpression->Eval(ctx);
-			switch (rng.Type) {
-			case Variant::DataType::String: {
-				throw std::exception("Bad input.");
-				break;
-			}
-			case Variant::DataType::Object: {
-				if (rng.Object->GetType() == typeid(ScriptObject)) {
-					auto obj = (ScriptObject*)rng.Object;
-					for (auto kv : obj->Fields) {
-						Variant v2{};
-						auto obj2 = new ScriptObject(ctx.gc);
-						obj2->Set("key", Variant{ ctx.gc, kv.first.c_str() });
-						obj2->Set("value", kv.second);
-						v2.Type = Variant::DataType::Object;
-						v2.Object = obj2;
-						ctx.SetFunctionVar(varname, v2);
-						bodyStatement_->Execute(ctx);
-						if (ctx.Status == ScriptContext::ScriptStatus::Break) {
-							ctx.ResetStatus();
-							break;
-						}
-						if (ctx.Status == ScriptContext::ScriptStatus::Continue) {
-							ctx.ResetStatus();
-							continue;
-						}
-						if (!ctx.ShouldRun())
-							break;
-					}
-				}
-				else if (rng.Object->GetType() == typeid(ScriptArray)) {
-					auto obj = (ScriptArray*)rng.Object;
-					for (auto v2 : obj->Variants) {
-						ctx.SetFunctionVar(varname, v2);
-						bodyStatement_->Execute(ctx);
-						if (ctx.Status == ScriptContext::ScriptStatus::Break) {
-							ctx.ResetStatus();
-							break;
-						}
-						if (ctx.Status == ScriptContext::ScriptStatus::Continue) {
-							ctx.ResetStatus();
-							continue;
-						}
-						if (!ctx.ShouldRun())
-							break;
-					}
-				}
-				else {
-					throw std::exception("Bad input.");
-				}
-				break;
-			}
-			default:
-				throw std::exception("Bad input.");
-			}
 		}
 
 		void Emit(ir::Emitter& em) override {

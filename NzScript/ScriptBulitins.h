@@ -113,10 +113,6 @@ void LoadBasic(ScriptContext& ctx) {
 	ctx.InternalFunctions["dir"] = [](ScriptContext& ctx, std::vector<Variant>& vars) -> Variant {
 		if (vars.size() == 0) {
 			auto sa = new ScriptArray(ctx.gc);
-			auto topFrame = ctx.FunctionStack.top();
-			for (auto var : topFrame.Variants) {
-				sa->Add(Variant{ ctx.gc, var.first.c_str() });
-			}
 			for (auto var : ctx.GlobalVars) {
 				sa->Add(Variant{ ctx.gc, var.first.c_str() });
 			}
