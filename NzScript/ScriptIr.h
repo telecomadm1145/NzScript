@@ -191,6 +191,8 @@ namespace ir {
 			return "PushFP8";
 		case ir::OP_PushStr:
 			return "PushStr";
+		case ir::OP_PushNull:
+			return "PushNull";
 		case ir::OP_Pop:
 			return "Pop";
 		case ir::OP_Popn:
