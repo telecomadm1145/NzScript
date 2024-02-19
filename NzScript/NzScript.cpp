@@ -366,7 +366,13 @@ int main() {
 						if (exp != 0) {
 							ir::Emitter em;
 							em.ctx = &ctx;
-							exp->Emit(em);
+							try {
+								exp->Emit(em);
+							}
+							catch (std::exception& ex) {
+								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
+								continue;
+							}
 							ir::Interpreter ip(em.Bytes, { em.Strings.begin(), em.Strings.end() });
 							try {
 								ip.Disasm();
