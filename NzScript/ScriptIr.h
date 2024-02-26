@@ -87,6 +87,8 @@ namespace ir {
 		// imm1
 		OP_PushArg,
 		// imm1
+		OP_StoreArg,
+		// imm1
 		OP_PushLocalI1,
 		// imm4
 		OP_PushLocalI4,
@@ -110,6 +112,8 @@ namespace ir {
 		OP_Not,
 
 		OP_Bnot,
+
+		OP_Dup,
 
 		// Compare two values and put the result into stack(in I4).
 		OP_Equ,
@@ -139,6 +143,8 @@ namespace ir {
 	};
 	const char* GetOpCodeAbbr(Opcode op) {
 		switch (op) {
+		case ir::OP_Dup:
+			return "Dup";
 		case ir::OP_Add:
 			return "Add";
 		case ir::OP_Sub:
@@ -261,33 +267,85 @@ namespace ir {
 	}
 	class Emitter {
 	public:
+		template <class Operand>
+		class Operation {
+			Emitter* em;
+			size_t ptr;
+
+		public:
+			Operation(Emitter* em, size_t ptr) : em(em), ptr(ptr){};
+			auto& GetOpcode() {
+				return (Opcode&)em->Bytes[ptr];
+			}
+			auto& GetOperand() {
+				return (Operand&)em->Bytes[ptr + 1];
+			}
+		};
+		template <>
+		class Operation<void> {
+			Emitter* em;
+			size_t ptr;
+
+		public:
+			Operation(Emitter* em, size_t ptr) : em(em), ptr(ptr){};
+			auto& GetOpcode() {
+				return (Opcode&)em->Bytes[ptr];
+			}
+		};
+		template <class Operand>
+		class OperationWithString {
+			Emitter* em;
+			size_t ptr;
+
+		public:
+			OperationWithString(Emitter* em, size_t ptr) : em(em), ptr(ptr){};
+			auto& GetOpcode() {
+				return (Opcode&)em->Bytes[ptr];
+			}
+			auto& GetOperand() {
+				return (std::string&)em->Strings[(*(Operand*)&em->Bytes[ptr + 1])];
+			}
+		};
 		ScriptContext* ctx = 0;
 		std::vector<char> Bytes;
 		std::vector<std::string> Strings;
-		void EmitOp(Opcode opc) {
+		auto EmitOp(Opcode opc) {
+			Operation<void> op{ this, Bytes.size() };
 			Bytes.push_back(opc);
+			return op;
 		}
-		void EmitOpI1(Opcode opc, unsigned char imm1) {
+		auto EmitOpI1(Opcode opc, unsigned char imm1) {
+			Operation<unsigned char> op{ this, Bytes.size() };
 			Bytes.push_back(opc);
 			Emit(imm1);
+			return op;
 		}
-		void EmitOp(Opcode opc, int imm4) {
+		auto EmitOp(Opcode opc, int imm4) {
+			Operation<int> op{ this, Bytes.size() };
 			Bytes.push_back(opc);
 			Emit(imm4);
+			return op;
 		}
-		void EmitOp(Opcode opc, long long imm8) {
+		auto EmitOp(Opcode opc, long long imm8) {
+			Operation<long long> op{ this, Bytes.size() };
 			Bytes.push_back(opc);
 			Emit(imm8);
+			return op;
 		}
-		void EmitOp(Opcode opc, float imm4) {
+		auto EmitOp(Opcode opc, float imm4) {
+			Operation<float> op{ this, Bytes.size() };
 			Bytes.push_back(opc);
 			Emit(imm4);
+			return op;
 		}
-		void EmitOp(Opcode opc, double imm8) {
+		auto EmitOp(Opcode opc, double imm8) {
+			Operation<double> op{ this, Bytes.size() };
 			Bytes.push_back(opc);
 			Emit(imm8);
+			return op;
 		}
-		void EmitOp(Opcode opc, const std::string& str) {
+		auto EmitOp(Opcode opc, const std::string& str) {
+			OperationWithString<unsigned int> ows{ this, Bytes.size() };
 			Bytes.push_back(opc);
 
 			int i = 0;
@@ -302,9 +360,11 @@ namespace ir {
 			if (!found) {
 				Strings.push_back(str);
 				Emit((int)Strings.size() - 1);
-				return;
+				return ows;
 			}
 			Emit(i);
+
+			return ows;
 		}
 		void Emit(auto imm) {
 			Bytes.insert(Bytes.end(), (char*)&imm, (char*)(&imm + 1));
@@ -316,18 +376,9 @@ namespace ir {
 		std::vector<std::string> Arguments;
 		std::vector<std::string> LocalVariables;
 		void EmitOpPushVar(const std::string& str) {
-			if (str == "null")
-			{
+			if (str == "null") {
 				EmitOp(Opcode::OP_PushNull);
 				return;
-			}
-			if (ctx != nullptr)
-			{
-				if (ctx->GlobalExists(str))
-				{
-					EmitOp(Opcode::OP_PushGlobalVar, str);
-					return;
-				}
 			}
 			int i = 0;
 			bool found = false;
@@ -342,6 +393,12 @@ namespace ir {
 				EmitOpI1(Opcode::OP_PushArg, i);
 				return;
 			}
+			if (ctx != nullptr) {
+				if (ctx->GlobalExists(str)) {
+					EmitOp(Opcode::OP_PushGlobalVar, str);
+					return;
+				}
+			}
 			i = 0;
 			found = false;
 			for (auto& str1 : LocalVariables) {
@@ -355,22 +412,15 @@ namespace ir {
 				EmitOpI1(Opcode::OP_PushLocalI1, i);
 				return;
 			}
-			else
-			{
+			else {
 				LocalVariables.push_back(str);
-				EmitOpI1(Opcode::OP_PushLocalI1, LocalVariables.size() - 1);
+				EmitOpI1(Opcode::OP_PushLocalI1, static_cast<unsigned char>(LocalVariables.size() - 1));
 				return;
 			}
 		}
 		void EmitOpStoreVar(const std::string& str) {
 			if (str == "null") {
 				return;
-			}
-			if (ctx != nullptr) {
-				if (ctx->GlobalExists(str)) {
-					EmitOp(Opcode::OP_StoreGlobalVar, str);
-					return;
-				}
 			}
 			int i = 0;
 			bool found = false;
@@ -382,9 +432,14 @@ namespace ir {
 				i++;
 			}
 			if (found) {
-				throw std::runtime_error("Cannot emit.");
-				EmitOpI1(Opcode::OP_StoreLocalI1, i);
+				EmitOpI1(Opcode::OP_StoreArg, i);
 				return;
+			}
+			if (ctx != nullptr) {
+				if (ctx->GlobalExists(str)) {
+					EmitOp(Opcode::OP_StoreGlobalVar, str);
+					return;
+				}
 			}
 			i = 0;
 			found = false;
@@ -401,7 +456,7 @@ namespace ir {
 			}
 			else {
 				LocalVariables.push_back(str);
-				EmitOpI1(Opcode::OP_StoreLocalI1, LocalVariables.size() - 1);
+				EmitOpI1(Opcode::OP_StoreLocalI1, static_cast<unsigned char>(LocalVariables.size() - 1));
 				return;
 			}
 		}

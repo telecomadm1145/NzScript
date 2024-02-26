@@ -8,134 +8,134 @@
 #include "ScriptVariant.h"
 #include "ScriptContext.h"
 #include "ScriptIr.h"
+// This impls a simple stack.
+class SimpStack {
+	Variant blank_val{};
 
-namespace ir {
-	// This impls a simple stack.
-	class SimpStack {
-		Variant blank_val{};
-
-	public:
-		Variant* ptr = 0;
-		/// <summary>
-		/// 传入的参数
-		/// </summary>
-		size_t bp = 0;
-		/// <summary>
-		/// 本地变量
-		/// </summary>
-		size_t bp2 = 0;
-		size_t sp = 0;
-		size_t max;
-		/// <summary>
-		/// 新建一个栈
-		/// </summary>
-		SimpStack() {
-			clear_and_resize(4096);
-		}
-		/// <summary>
-		/// 清理栈
-		/// </summary>
-		~SimpStack() {
+public:
+	Variant* ptr = 0;
+	/// <summary>
+	/// 传入的参数
+	/// </summary>
+	size_t bp = 0;
+	/// <summary>
+	/// 本地变量
+	/// </summary>
+	size_t bp2 = 0;
+	size_t sp = 0;
+	size_t max;
+	/// <summary>
+	/// 新建一个栈
+	/// </summary>
+	SimpStack() {
+		clear_and_resize(4096);
+	}
+	/// <summary>
+	/// 清理栈
+	/// </summary>
+	~SimpStack() {
+		delete[] ptr;
+	}
+	/// <summary>
+	/// 重置并分配指定大小的栈
+	/// </summary>
+	/// <param name="sz">栈大小</param>
+	void clear_and_resize(size_t sz) {
+		if (ptr != nullptr)
 			delete[] ptr;
-		}
-		/// <summary>
-		/// 重置并分配指定大小的栈
-		/// </summary>
-		/// <param name="sz">栈大小</param>
-		void clear_and_resize(size_t sz) {
-			if (ptr != nullptr)
-				delete[] ptr;
-			max = sz;
-			sp = 0;
-			ptr = new Variant[max];
-		}
-		/// <summary>
-		/// 重置SP到指定值
-		/// </summary>
-		/// <param name="sz">SP的新值</param>
-		void reset(size_t sz) {
-			sp = sz;
-		}
-		void clear() {
-			sp = 0;
-		}
-		Variant top() {
-			if (sp == 0)
-				return blank_val;
-			return ptr[--sp];
-		}
-		Variant top_r() {
-			if (sp == 0)
-				return blank_val;
-			Variant v = ptr[--sp];
-			return v;
-		}
-		Variant& top_p() {
-			if (sp == 0)
-				return blank_val = {};
-			return ptr[sp - 1];
-		}
-		Variant& operator[](size_t i) {
-			return ptr[i];
-		}
-		void pop() {
-			sp--;
-		}
-		void push(const Variant& v) {
-			ptr[sp++] = v;
-			if (sp >= max)
-				throw std::runtime_error("Stack overflow.");
-		}
-		Variant& get_arg(size_t i) {
-			if (i> 20)
-				throw std::runtime_error("Invalid Operation.");
-			return ptr[bp + i];
-		}
-		Variant& get_local(size_t i) {
-			if (i > 20)
-				throw std::runtime_error("Invalid Operation.");
-			return ptr[bp2 + i];
-		}
-		Variant& get_lr() {
-			return ptr[bp2 - 1]; // Linked address
-		}
-		Variant& get_last_bp2() {
-			return ptr[bp2 - 2]; // 上一个 Base Pointer(2)
-		}
-		Variant& get_last_bp() {
-			return ptr[bp2 - 3]; // 上一个 Base Pointer
-		}
-		/// <summary>
-		/// 弹出栈帧，并返回跳转的PC
-		/// </summary>
-		/// <returns>PC</returns>
-		size_t pop_frame() {
-			auto lr = get_lr().PC;
-			// 重置栈指针
-			sp = bp;
-			bp = get_last_bp().PC;
-			bp2 = get_last_bp2().PC;
-			return lr;
-		}
-		size_t size() {
-			return sp;
-		}
-		Variant* begin() {
-			return &ptr[0];
-		}
-		Variant* end() {
-			return &ptr[sp];
-		}
-	};
+		max = sz;
+		sp = 0;
+		ptr = new Variant[max];
+	}
+	/// <summary>
+	/// 重置SP到指定值
+	/// </summary>
+	/// <param name="sz">SP的新值</param>
+	void reset(size_t sz) {
+		sp = sz;
+	}
+	void clear() {
+		sp = 0;
+	}
+	Variant top() {
+		if (sp == 0)
+			return blank_val;
+		return ptr[--sp];
+	}
+	Variant top_r() {
+		if (sp == 0)
+			return blank_val;
+		Variant v = ptr[--sp];
+		return v;
+	}
+	Variant& top_p() {
+		if (sp == 0)
+			return blank_val = {};
+		return ptr[sp - 1];
+	}
+	Variant& operator[](size_t i) {
+		return ptr[i];
+	}
+	void pop() {
+		sp--;
+	}
+	void push(const Variant& v) {
+		ptr[sp++] = v;
+		if (sp >= max)
+			throw std::runtime_error("Stack overflow.");
+	}
+	Variant& get_arg(size_t i) {
+		if (bp + i >= bp2 - 3)
+			throw std::runtime_error("Invalid operation. (Argument doesn't exist; caller's mistake)");
+		return ptr[bp + i];
+	}
+	Variant& get_local(size_t i) {
+		return ptr[bp2 + i];
+	}
+	Variant& get_lr() {
+		return ptr[bp2 - 1]; // Linked address
+	}
+	Variant& get_last_bp2() {
+		return ptr[bp2 - 2]; // 上一个 Base Pointer(2)
+	}
+	Variant& get_last_bp() {
+		return ptr[bp2 - 3]; // 上一个 Base Pointer
+	}
+	bool can_pop_frame() {
+		return bp2 >= 3;
+	}
+	/// <summary>
+	/// 弹出栈帧，并返回跳转的PC
+	/// </summary>
+	/// <returns>PC</returns>
+	size_t pop_frame() {
+		auto lr = get_lr().Pointer;
+		// 重置栈指针
+		sp = bp;
+		bp = get_last_bp().Pointer;
+		bp2 = get_last_bp2().Pointer;
+		return lr;
+	}
+	size_t size() {
+		return sp;
+	}
+	Variant* begin() {
+		return &ptr[0];
+	}
+	Variant* end() {
+		return &ptr[sp];
+	}
+};
+namespace ir {
 	class Interpreter {
 	public:
 		Interpreter(const std::vector<char>& bytes, const std::vector<std::string>& strings)
 			: Bytes(bytes), Strings(strings) {}
-		void Run(ScriptContext& ctx) {
+		Variant Run(ScriptContext& ctx) {
 			PC = 0;
 			while (PC < Bytes.size()) {
-				//auto p = PC;
-				//DecodeAsm(p);
+				// auto p = PC;
+				// DecodeAsm(p);
 				auto opc = static_cast<Opcode>(Bytes[PC++]);
 				switch (opc) {
 				case OP_Add:
@@ -164,6 +164,9 @@ namespace ir {
 					break;
 				case OP_Xor:
 					Stack.push(Stack.top() ^ Stack.top());
+					break;
+				case OP_Dup:
+					Stack.push(Stack.top_p());
 					break;
 				case OP_GetProp: {
 					Variant obj = Stack.top();
@@ -197,12 +200,26 @@ namespace ir {
 					else
 						throw std::runtime_error("Left must be object.");
 				} break;
-				case OP_GetIndex:
-					// TODO: Implement
-					break;
-				case OP_SetIndex:
-					// TODO: Implement
-					break;
+				case OP_GetIndex: {
+					Variant index = Stack.top();
+					Variant obj = Stack.top();
+					if (obj.Type == Variant::DataType::Object) {
+						Stack.push(((ScriptArray*)obj.Object)->Get(script_cast<long long>(index)));
+					}
+					else
+						throw std::runtime_error("Left must be array.");
+				} break;
+				case OP_SetIndex: {
+					Variant index = Stack.top();
+					Variant right = Stack.top();
+					Variant obj = Stack.top();
+					if (obj.Type == Variant::DataType::Object) {
+						((ScriptArray*)obj.Object)->Set(script_cast<long long>(index), right);
+						Stack.push(right);
+					}
+					else
+						throw std::runtime_error("Left must be array.");
+				} break;
 				case OP_Int32:
 					Stack.push(script_cast<Imm4>(Stack.top()));
 					break;
@@ -220,15 +237,19 @@ namespace ir {
 					break;
 				case OP_Ret: {
 					auto v = Stack.top();
+					if (!Stack.can_pop_frame())
+						return v;
 					PC = Stack.pop_frame();
 					Stack.push(v);
 				} break;
 				case OP_RetNull: {
+					if (!Stack.can_pop_frame())
+						return {};
 					PC = Stack.pop_frame();
 					Stack.push({});
 				} break;
 				case OP_Brk:
-					return;
+					return {};
 				case OP_Err:
 					throw std::runtime_error("Soft break");
 				case OP_Call: {
@@ -248,17 +269,18 @@ namespace ir {
 					if (left.Type == Variant::DataType::FuncPC) {
 						auto rbp = Stack.sp - count;
 						Variant v{};
+						v.Type = Variant::DataType::Ptr;
+						v.Pointer = Stack.bp;
+						Stack.push(v);
+						v.Pointer = Stack.bp2;
+						Stack.push(v);
 						v.Type = Variant::DataType::ReturnPC;
-						v.PC = Stack.bp;
-						Stack.push(v);
-						v.PC = Stack.bp2;
-						Stack.push(v);
-						v.PC = PC;
+						v.Pointer = PC;
 						Stack.push(v);
 						Stack.bp = rbp;
 						Stack.bp2 = Stack.sp;
 
-						PC = left.PC;
+						PC = left.Pointer;
 						break;
 					}
 					throw std::exception("Left is not Callable.");
@@ -272,7 +294,7 @@ namespace ir {
 				case OP_PushFuncPtr: {
 					Variant v{};
 					v.Type = Variant::DataType::FuncPC;
-					v.PC = Read<UImm4>(Bytes, PC);
+					v.Pointer = Read<UImm4>(Bytes, PC);
 					Stack.push(v);
 				} break;
 				case OP_PushI4:
@@ -297,10 +319,13 @@ namespace ir {
 					Stack.push(ctx.LookupGlobal(Strings[Read<UImm4>(Bytes, PC)]));
 					break;
 				case OP_StoreGlobalVar:
-					ctx.GlobalVars[Strings[Read<UImm4>(Bytes, PC)]] = Stack.top_p();
+					ctx.SetGlobalVar(Strings[Read<UImm4>(Bytes, PC)], Stack.top_p());
 					break;
 				case OP_PushArg:
 					Stack.push(Stack.get_arg(Read<Imm1>(Bytes, PC)));
+					break;
+				case OP_StoreArg:
+					Stack.get_arg(Read<Imm1>(Bytes, PC)) = Stack.top_p();
 					break;
 				case OP_PushLocalI1:
 					Stack.push(Stack.get_local(Read<Imm1>(Bytes, PC)));
@@ -385,13 +410,14 @@ namespace ir {
 					throw std::runtime_error("Invalid opcode");
 				}
 			}
+			return {};
 		}
 		size_t GetPC() {
 			return PC;
 		}
 		void PrintBuf(const void* lpBuffer, size_t dwSize) {
 			for (size_t i = 0; i < dwSize; i++) {
-				printf("%02X ", ((BYTE*)lpBuffer)[i]);
+				printf("%02X ", ((unsigned char*)lpBuffer)[i]);
 			}
 		}
 		void Disasm() {

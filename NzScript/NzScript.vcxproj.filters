@@ -69,8 +69,14 @@
     <ClInclude Include="ScriptIr.h">
       <Filter>源文件</Filter>
     </ClInclude>
+    <ClInclude Include="ScriptOptimizer.h">
+      <Filter>源文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Text Include="cmath_functions.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Natvis Include="NzScript.natvis" />
   </ItemGroup>
 </Project>

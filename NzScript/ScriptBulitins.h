@@ -5,9 +5,9 @@
 void LoadBasic(ScriptContext& ctx) {
 	ctx.InternalFunctions["print"] = [](ScriptContext& ctx, std::vector<Variant>& vars) -> Variant {
 		for (auto var : vars) {
-			std::cout << var.ToString();
+			std::cout << var.ToString() << " ";
 		}
-		std::cout << std::endl;
+		std::cout << "\n";
 		return {};
 	};
 	ctx.InternalFunctions["intern"] = [](ScriptContext& ctx, std::vector<Variant>& vars) -> Variant {

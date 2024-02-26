@@ -19,7 +19,7 @@ struct Variant {
 		double Double;
 		GCObject* Object;
 		ScriptInternMethod InternMethod;
-		size_t PC;
+		size_t Pointer;
 		// Variant* VariantPtr;
 	};
 	enum class DataType {
@@ -38,16 +38,34 @@ struct Variant {
 		VariantPtr_NotUsed,
 		ReturnPC,
 		FuncPC,
-	} Type =  DataType::Null;
+		Ptr,
+	} Type = DataType::Null;
 	std::string ToString() const;
-	operator bool() {
+	operator bool() const {
 		if (Type == DataType::Null)
 			return false;
 		if (Type == DataType::Int || Type == DataType::Float)
 			return Int ? 1 : 0;
 		return Long ? 1 : 0;
 	}
+	bool IsNumber() const {
+		switch (Type) {
+		case Variant::DataType::Double:
+		case Variant::DataType::Float:
+		case Variant::DataType::Int:
+		case Variant::DataType::Long:
+			return true;
+		default:
+			return false;
+		}
+	}
+	const char* GetString() const {
+		if (Type != DataType::String)
+			throw std::exception("Left is not string.");
+		return ((GCString*)Object)->Pointer;
+	}
 };
+constexpr static Variant NullVariant = {};
 class ScriptObject : public GCObject {
 public:
 	ScriptObject(GC& gc) : GCObject(gc) {
@@ -118,7 +136,7 @@ T script_cast(Variant);
 template <class T>
 Variant script_cast(T);
 #pragma warning(push)
-#pragma warning(disable:4244)
+#pragma warning(disable : 4244)
 template <>
 int script_cast(Variant v) {
 	switch (v.Type) {
@@ -359,8 +377,62 @@ AUTO_OPDEF2(&)
 AUTO_OPDEF2(&&)
 AUTO_OPDEF2(|)
 AUTO_OPDEF2(||)
-AUTO_OPDEF(==)
-AUTO_OPDEF(!=)
+Variant operator==(const Variant& lft, const Variant& rht) {
+	if (lft.IsNumber() && rht.IsNumber()) {
+		if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
+			return Variant{ script_cast<double>(lft) == script_cast<double>(rht) };
+		}
+		if (lft.Type == Variant::DataType::Float || rht.Type == Variant::DataType::Float) {
+			return Variant{ script_cast<float>(lft) == script_cast<float>(rht) };
+		}
+		if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
+			return Variant{ script_cast<long long>(lft) == script_cast<long long>(rht) };
+		}
+		if (lft.Type == Variant::DataType::Int || rht.Type == Variant::DataType::Int) {
+			return Variant{ script_cast<int>(lft) == script_cast<int>(rht) };
+		}
+	}
+	if (lft.Type == Variant::DataType::String && rht.Type == Variant::DataType::String) {
+		return Variant{ strcmp(lft.GetString(), rht.GetString()) == 0 };
+	}
+	if (lft.Type != rht.Type) {
+		return Variant{ 0 };
+	}
+	return lft.Pointer == rht.Pointer;
+}
+Variant operator!=(const Variant& lft, const Variant& rht) {
+	if (lft.IsNumber() && rht.IsNumber()) {
+		if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
+			return Variant{ script_cast<double>(lft) != script_cast<double>(rht) };
+		}
+		if (lft.Type == Variant::DataType::Float || rht.Type == Variant::DataType::Float) {
+			return Variant{ script_cast<float>(lft) != script_cast<float>(rht) };
+		}
+		if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
+			return Variant{ script_cast<long long>(lft) != script_cast<long long>(rht) };
+		}
+		if (lft.Type == Variant::DataType::Int || rht.Type == Variant::DataType::Int) {
+			return Variant{ script_cast<int>(lft) != script_cast<int>(rht) };
+		}
+	}
+	if (lft.Type == Variant::DataType::String && rht.Type == Variant::DataType::String) {
+		return Variant{ strcmp(lft.GetString(), rht.GetString()) != 0 };
+	}
+	if (lft.Type != rht.Type) {
+		return Variant{ 1 };
+	}
+	return lft.Pointer != rht.Pointer;
+}
+Variant operator==(const Variant& lft, const char* rht) {
+	if (lft.Type != Variant::DataType::String)
+		return 0;
+	return strcmp(lft.GetString(), rht) == 0;
+}
+Variant operator!=(const Variant& lft, const char* rht) {
+	if (lft.Type != Variant::DataType::String)
+		return 1;
+	return strcmp(lft.GetString(), rht) != 0;
+}
 AUTO_OPDEF(<)
 AUTO_OPDEF(>)
 AUTO_OPDEF(<=)

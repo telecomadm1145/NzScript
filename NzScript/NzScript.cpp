@@ -7,11 +7,14 @@
 #include "ScriptAst.h"
 #include "ScriptBulitins.h"
 
+#include "ScriptOptimizer.h"
+
 #include "GameBuffer.h"
 
 #include <thread>
 #include <windows.h>
 #include "ScriptJit.h"
+
 
 void startup() {
 	auto hstdin = GetStdHandle(STD_INPUT_HANDLE);
@@ -97,6 +100,7 @@ int main() {
 			case Lexer::TokenType::Identifier: {
 				if (tok.lexeme == "function" ||
 					tok.lexeme == "var" ||
+					tok.lexeme == "let" ||
 					tok.lexeme == "debugbreak") {
 					clr = PredefinedColor::Keyword;
 					break;
@@ -364,29 +368,32 @@ int main() {
 						LARGE_INTEGER l{};
 						QueryPerformanceFrequency(&l);
 						if (exp != 0) {
+							AST::ConstReduce(ctx, exp);
 							ir::Emitter em;
 							em.ctx = &ctx;
-							try {
-								exp->Emit(em);
-							}
-							catch (std::exception& ex) {
-								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
-								continue;
-							}
-							ir::Interpreter ip(em.Bytes, { em.Strings.begin(), em.Strings.end() });
-							try {
-								ip.Disasm();
-								std::cout << "-------------------\n";
-								LARGE_INTEGER li{};
-								QueryPerformanceCounter(&li);
-								ip.Run(ctx);
-								LARGE_INTEGER li2{};
-								QueryPerformanceCounter(&li2);
-								std::cout << "\nUsed:" << (double)(li2.QuadPart - li.QuadPart) / l.QuadPart * 1000.0 << "\n";
-							}
-							catch (std::exception& ex) {
-								std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n"
-										  <<std::hex<< ip.GetPC()<<std::dec;
+							// try {
+							exp->Emit(em);
+							//}
+							// catch (std::exception& ex) {
+							//	std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n";
+							//	em.Bytes.clear();
+							//}
+							if (!em.Bytes.empty()) {
+								ir::Interpreter ip(em.Bytes, { em.Strings.begin(), em.Strings.end() });
+								try {
+									ip.Disasm();
+									std::cout << "-------------------\n";
+									LARGE_INTEGER li{};
+									QueryPerformanceCounter(&li);
+									ip.Run(ctx);
+									LARGE_INTEGER li2{};
+									QueryPerformanceCounter(&li2);
+									std::cout << "\nUsed:" << (double)(li2.QuadPart - li.QuadPart) / l.QuadPart * 1000.0 << "\n";
+								}
+								catch (std::exception& ex) {
+									std::cout << "\u001b[38;2;255;40;40m" << ex.what() << "\u001b[38;2;255;255;255m\n"
+											  << "在 解释器 PC -> " << std::hex << ip.GetPC() << std::dec << "\n";
+								}
 							}
 						}
 						if (exp != 0)
@@ -455,6 +462,17 @@ int main() {
 				}
 				errorToken = -1;
 				inputbuf.erase(inputbuf.begin() + cursor);
+				continue;
+			}
+			case VK_INSERT: {
+				auto glo = GlobalAlloc(0, inputbuf.size() + 1);
+				auto p = GlobalLock(glo);
+				memcpy(p, inputbuf.data(), inputbuf.size() + 1);
+				GlobalUnlock(p);
+				OpenClipboard(GetConsoleWindow());
+				EmptyClipboard();
+				SetClipboardData(CF_TEXT, glo);
+				CloseClipboard();
 				continue;
 			}
 			case 9: {

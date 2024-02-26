@@ -5,7 +5,6 @@
 #include "ScriptIr.h"
 
 namespace AST {
-
 	class Statement {
 	public:
 		Statement() = default;
@@ -15,80 +14,89 @@ namespace AST {
 		virtual void Emit(ir::Emitter& em) {
 			throw std::exception("Invalid operation.");
 		}
+		virtual bool IsConst(ScriptContext& ctx) {
+			return false;
+		}
 	};
-
 	class Program {
 	public:
-		void addStatement(class Statement* statement) {
-			statements_.push_back(statement);
-		}
-
-		std::vector<Statement*> getStatements() const {
-			return statements_;
-		}
+		virtual ~Program() {}
 		void Emit(ir::Emitter& e) {
-			e.EmitOpI1(ir::Opcode::OP_PushN, 0);
+			auto init_command = e.EmitOpI1(ir::Opcode::OP_PushN, 0); // 初始化栈
+
+
+			// 插入所有程序内的语句
 			for (auto stat : statements_) {
 				stat->Emit(e);
 			}
-			e.Bytes[1] = e.LocalVariables.size();
-			e.EmitOp(ir::Opcode::OP_Brk);
-		}
 
-	private:
+			init_command.GetOperand() = static_cast<unsigned char>(e.LocalVariables.size()); // 由于已经插入了所有命令，现在可以获取本地变量的数量，并正确初始化栈
+
+			e.EmitOp(ir::Opcode::OP_Brk); // 终止程序运行，如果执行到末尾
+		}
 		std::vector<Statement*> statements_;
 	};
+
 	class Expression : public Statement {
 	public:
-		virtual bool IsConst() {
-			return false;
-		}
 		virtual bool IsLeftValue() {
 			return false;
 		}
-		virtual Variant Eval(ScriptContext& ctx) = 0;
+		virtual Variant Eval(ScriptContext& ctx) {
+			throw std::runtime_error("Invalid operation.");
+		}
 		virtual std::string GetVariableName() {
-			throw std::exception("Invalid operation.");
+			throw std::runtime_error("Invalid operation.");
 		}
 		virtual void EmitSet(ir::Emitter& em, Expression* tgt) {
-			throw std::exception("Invalid operation.");
+			throw std::runtime_error("Invalid operation.");
 		}
 	};
 	class LambdaExpression : public Expression {
 	public:
-		Variant Eval(ScriptContext& ctx) override {
-			return {};
-		}
 		std::vector<std::string> Params;
 		std::vector<Statement*> Statements;
 		LambdaExpression(std::vector<std::string> Params, std::vector<Statement*> Statements)
 			: Params(Params), Statements(Statements) {}
 		void Emit(ir::Emitter& em) override {
-			// throw std::runtime_error("");
+			auto beg = em.Bytes.size();							 // 记录 Lambda 函数体开始
+			auto jump_across = em.EmitOp(ir::Opcode::OP_Jmp, 0); // 跳过 Lambda 函数体
+
+			// 隔离 Emitter
 			ir::Emitter em2{};
-			auto beg = em.Bytes.size();
-			em.EmitOp(ir::Opcode::OP_Jmp, 0);
 			em2.ctx = em.ctx;
 			em2.Arguments = Params;
 			em2.Strings = em.Strings;
 			em2.Bytes = em.Bytes;
-			auto func_start = em.Bytes.size();
-			em2.EmitOpI1(ir::Opcode::OP_PushN, 0);
+
+			auto func_start = em.Bytes.size();						   // 记录函数的开始
+			auto init_command = em2.EmitOpI1(ir::Opcode::OP_PushN, 0); // 初始化栈
+
+			// 按序插入所有语句
 			for (auto exp : Statements) {
 				exp->Emit(em2);
 			}
+
+			// 拷贝新插入的指令
 			em.Bytes = em2.Bytes;
 			em.Strings = em2.Strings;
-			em2.Bytes[func_start + 1] = em2.LocalVariables.size();
-			em.EmitOp(ir::Opcode::OP_RetNull);
-			auto end = em.Bytes.size();
-			em.Modify(&em.Bytes[beg + 1], (int)(end - beg) - 5);
-			em.EmitOp(ir::Opcode::OP_PushFuncPtr, (int)func_start);
+
+			init_command.GetOperand() = static_cast<unsigned char>(em2.LocalVariables.size()); // 获取新的栈的本地变量数量，使其正确初始化
+			em.EmitOp(ir::Opcode::OP_RetNull);												   // 以防 CtrlFlow 中有路径没有返回，插入额外的返回指令，抛弃任何可能的数据
+			auto end = em.Bytes.size();														   // Lambda 函数的结尾
+			jump_across.GetOperand() = (int)(end - beg) - 5;								   // 计算需要跳过的距离，并减去 Jmp imm4 指令的长度(5)
+			em.EmitOp(ir::Opcode::OP_PushFuncPtr, (int)func_start);							   // 发射一条指令，将上述 Lambda 函数作为值推入栈
 		}
 	};
 	class VariantRefExpression : public Expression {
 	public:
 		VariantRefExpression(std::string varname) : VariantName(varname) {
+		}
+		bool IsConst(ScriptContext& ctx) override {
+			if (ctx.InternalConstants.find(VariantName) != ctx.InternalConstants.end()) {
+				return true;
+			}
+			return false;
 		}
 		std::string VariantName;
 		Variant Eval(ScriptContext& ctx) override {
@@ -101,19 +109,23 @@ namespace AST {
 			return VariantName;
 		}
 		void Emit(ir::Emitter& em) override {
-			// TODO: Lookup Variable
-			// em.EmitOp(ir::Opcode::OP_PushVar, VariantName);
-			em.EmitOpPushVar(VariantName);
+			em.EmitOpPushVar(VariantName); // 插入获取变量的指令
 		}
 		void EmitSet(ir::Emitter& em, Expression* tgt) override {
 			if (tgt != 0)
-				tgt->Emit(em);
-			em.EmitOpStoreVar(VariantName);
+				tgt->Emit(em);				// 插入目标语句，如果可能
+			em.EmitOpStoreVar(VariantName); // 插入存储变量的指令
 		}
 	};
 	class GlobalVariantRefExpression : public Expression {
 	public:
 		GlobalVariantRefExpression(std::string varname) : VariantName(varname) {
+		}
+		bool IsConst(ScriptContext& ctx) override {
+			if (ctx.InternalConstants.find(VariantName) != ctx.InternalConstants.end()) {
+				return true;
+			}
+			return false;
 		}
 		std::string VariantName;
 		Variant Eval(ScriptContext& ctx) override {
@@ -127,21 +139,23 @@ namespace AST {
 		}
 		void Emit(ir::Emitter& em) override {
 			if (em.ctx != nullptr)
-				em.ctx->GlobalVars[VariantName];
-			em.EmitOp(ir::Opcode::OP_PushGlobalVar, VariantName);
+				em.ctx->GlobalVars[VariantName];				  // 保留为全局变量，使后续 Emit 流程 插入正确 Scope 的指令
+			em.EmitOp(ir::Opcode::OP_PushGlobalVar, VariantName); // 插入读取变量的指令
 		}
 		void EmitSet(ir::Emitter& em, Expression* tgt) override {
 			if (em.ctx != nullptr)
-				em.ctx->GlobalVars[VariantName];
+				em.ctx->GlobalVars[VariantName]; // 保留为全局变量，使后续 Emit 流程 插入正确 Scope 的指令
 			if (tgt != 0)
-				tgt->Emit(em);
-			em.EmitOp(ir::Opcode::OP_StoreGlobalVar, VariantName);
+				tgt->Emit(em);									   // 插入目标语句，如果可能
+			em.EmitOp(ir::Opcode::OP_StoreGlobalVar, VariantName); // 插入存储变量的指令
 		}
 	};
 	class StringExpression : public Expression {
 	public:
 		std::string str;
-
+		bool IsConst(ScriptContext& ctx) override {
+			return true;
+		}
 		// 通过 Expression 继承
 		Variant Eval(ScriptContext& ctx) override {
 			return { ctx.gc, str.data() };
@@ -151,14 +165,14 @@ namespace AST {
 			: str(str) {
 		}
 		void Emit(ir::Emitter& em) override {
-			em.EmitOp(ir::Opcode::OP_PushStr, str);
+			em.EmitOp(ir::Opcode::OP_PushStr, str); // 插入字符串
 		}
 	};
 	class NumberExpression : public Expression {
 	public:
 		NumberExpression(Variant v) : var(v) {}
 		Variant var;
-		virtual bool IsConst() {
+		bool IsConst(ScriptContext& ctx) override {
 			return true;
 		}
 		// 通过 Expression 继承
@@ -166,7 +180,8 @@ namespace AST {
 			return var;
 		}
 		void Emit(ir::Emitter& em) override {
-			if (var.Type == Variant::DataType::Int) {
+			// 根据类型，插入适合的指令
+			if (var.Type == Variant::DataType::Int) { // I4
 				if (var.Int == 0) {
 					em.EmitOp(ir::Opcode::OP_PushI4_0);
 				}
@@ -176,7 +191,7 @@ namespace AST {
 				else
 					em.EmitOp(ir::Opcode::OP_PushI4, var.Int);
 			}
-			else if (var.Type == Variant::DataType::Long) {
+			else if (var.Type == Variant::DataType::Long) { // I8
 				if (var.Long == 0) {
 					em.EmitOp(ir::Opcode::OP_PushI4_0);
 				}
@@ -190,7 +205,13 @@ namespace AST {
 				em.EmitOp(ir::Opcode::OP_PushFP4, var.Float);
 			}
 			else if (var.Type == Variant::DataType::Double) {
-				em.EmitOp(ir::Opcode::OP_PushFP4, var.Double);
+				em.EmitOp(ir::Opcode::OP_PushFP8, var.Double);
+			}
+			else if (var.Type == Variant::DataType::Null) {
+				em.EmitOp(ir::Opcode::OP_PushNull);
+			}
+			else if (var.Type == Variant::DataType::String) {
+				em.EmitOp(ir::Opcode::OP_PushStr, var.GetString());
 			}
 			else {
 				throw std::runtime_error("err");
@@ -205,6 +226,8 @@ namespace AST {
 		Positive,
 		Increase,
 		Decrease,
+		PostfixIncrease,
+		PostfixDecrease,
 	};
 	enum class BinOp {
 		Nop,
@@ -230,30 +253,37 @@ namespace AST {
 		Xor,
 
 		Range,
-	};
 
+		AddMov,
+		SubMov,
+		MulMov,
+		DivMov,
+		BandMov,
+		BorMov,
+		XorMov,
+	};
 	class OutNullStatement : public Statement {
 	public:
 		OutNullStatement(Expression* expr) : expr(expr) {}
 		Expression* expr;
+		bool IsConst(ScriptContext& ctx) override {
+			if (expr == nullptr)
+				return true;
+			return expr->IsConst(ctx);
+		}
 		void Emit(ir::Emitter& em) override {
-			expr->Emit(em);
-			em.EmitOp(ir::Opcode::OP_Pop);
+			if (expr != 0) {
+				expr->Emit(em);				   // 插入目标语句
+				em.EmitOp(ir::Opcode::OP_Pop); // 弹出内容
+			}
 		}
 	};
 	class BinaryExpression : public Expression {
 	public:
 		BinaryExpression(Expression* leftExpression, BinOp op, Expression* rightExpression)
 			: leftExpression_(leftExpression), op(op), rightExpression_(rightExpression) {}
-		virtual bool IsConst() {
-			return leftExpression_->IsConst() && rightExpression_->IsConst();
-		}
-		Expression* getLeftExpression() const {
-			return leftExpression_;
-		}
-
-		Expression* getRightExpression() const {
-			return rightExpression_;
+		bool IsConst(ScriptContext& ctx) override {
+			return leftExpression_->IsConst(ctx) && rightExpression_->IsConst(ctx);
 		}
 		~BinaryExpression() {
 			if (leftExpression_ != 0)
@@ -261,8 +291,6 @@ namespace AST {
 			if (rightExpression_ != 0)
 				delete rightExpression_;
 		}
-
-	private:
 		Expression* leftExpression_;
 		Expression* rightExpression_;
 		BinOp op;
@@ -592,59 +620,12 @@ namespace AST {
 			case AST::BinOp::IsEqual: {
 				auto lft = leftExpression_->Eval(ctx);
 				auto rht = rightExpression_->Eval(ctx);
-				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
-					return lft.ToString() == rht.ToString();
-				}
-				if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
-					return Variant{
-						script_cast<double>(lft) == script_cast<double>(rht)
-					};
-				}
-				if (lft.Type == Variant::DataType::Float || rht.Type == Variant::DataType::Float) {
-					return Variant{
-						script_cast<float>(lft) == script_cast<float>(rht)
-					};
-				}
-				if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
-					return Variant{
-						script_cast<long long>(lft) == script_cast<long long>(rht)
-					};
-				}
-				if (lft.Type == Variant::DataType::Int || rht.Type == Variant::DataType::Int) {
-					return Variant{
-						script_cast<int>(lft) == script_cast<int>(rht)
-					};
-				}
-				return lft.Type == rht.Type && lft.Long == rht.Long;
+				return lft == rht;
 			} break;
 			case AST::BinOp::NotEqual: {
 				auto lft = leftExpression_->Eval(ctx);
 				auto rht = rightExpression_->Eval(ctx);
-				if (lft.Type == Variant::DataType::String || rht.Type == Variant::DataType::String) {
-					return lft.ToString() != rht.ToString();
-				}
-				if (lft.Type == Variant::DataType::Double || rht.Type == Variant::DataType::Double) {
-					return Variant{
-						script_cast<double>(lft) != script_cast<double>(rht)
-					};
-				}
-				if (lft.Type == Variant::DataType::Float || rht.Type == Variant::DataType::Float) {
-					return Variant{
-						script_cast<float>(lft) != script_cast<float>(rht)
-					};
-				}
-				if (lft.Type == Variant::DataType::Long || rht.Type == Variant::DataType::Long) {
-					return Variant{
-						script_cast<long long>(lft) != script_cast<long long>(rht)
-					};
-				}
-				if (lft.Type == Variant::DataType::Int || rht.Type == Variant::DataType::Int) {
-					return Variant{
-						script_cast<int>(lft) != script_cast<int>(rht)
-					};
-				}
-
-				throw std::exception("Cannot promote a fit type.");
+				return lft != rht;
 			} break;
 			case AST::BinOp::Range: {
 				auto lft = leftExpression_->Eval(ctx);
@@ -694,6 +675,13 @@ namespace AST {
 				em.EmitOp(ir::Opcode::OP_SetProp, r);
 				return;
 			}
+			case AST::BinOp::Index: {
+				leftExpression_->Emit(em);
+				expr->Emit(em);
+				rightExpression_->Emit(em);
+				em.EmitOp(ir::Opcode::OP_SetIndex);
+				return;
+			}
 			default:
 				throw std::runtime_error("Invalid Operation.");
 			}
@@ -728,6 +716,22 @@ namespace AST {
 			case AST::BinOp::Div:
 				em.EmitOp(ir::Opcode::OP_Div);
 				break;
+			case AST::BinOp::AddMov:
+				em.EmitOp(ir::Opcode::OP_Add);
+				leftExpression_->EmitSet(em, 0);
+				break;
+			case AST::BinOp::SubMov:
+				em.EmitOp(ir::Opcode::OP_Sub);
+				leftExpression_->EmitSet(em, 0);
+				break;
+			case AST::BinOp::MulMov:
+				em.EmitOp(ir::Opcode::OP_Mul);
+				leftExpression_->EmitSet(em, 0);
+				break;
+			case AST::BinOp::DivMov:
+				em.EmitOp(ir::Opcode::OP_Div);
+				leftExpression_->EmitSet(em, 0);
+				break;
 			case AST::BinOp::Greater:
 				em.EmitOp(ir::Opcode::OP_Gt);
 				break;
@@ -761,102 +765,27 @@ namespace AST {
 			case AST::BinOp::Xor:
 				em.EmitOp(ir::Opcode::OP_Xor);
 				break;
+			case AST::BinOp::BandMov:
+				em.EmitOp(ir::Opcode::OP_Band);
+				leftExpression_->EmitSet(em, 0);
+				break;
+			case AST::BinOp::BorMov:
+				em.EmitOp(ir::Opcode::OP_Bor);
+				leftExpression_->EmitSet(em, 0);
+				break;
+			case AST::BinOp::XorMov:
+				em.EmitOp(ir::Opcode::OP_Xor);
+				leftExpression_->EmitSet(em, 0);
+				break;
 			case AST::BinOp::Index:
 				em.EmitOp(ir::Opcode::OP_GetIndex);
 				break;
 			case AST::BinOp::Range:
 				throw std::runtime_error("Range haven't been suppported.");
 			default:
+				throw std::runtime_error("op haven't been supported.");
 				break;
 			}
-		}
-	};
-	class IndexExpression : public Expression {
-	public:
-		IndexExpression(Expression* leftExpression, Expression* rightExpression)
-			: leftExpression_(leftExpression), rightExpression_(rightExpression) {}
-
-		Expression* getLeftExpression() const {
-			return leftExpression_;
-		}
-
-		Expression* getRightExpression() const {
-			return rightExpression_;
-		}
-		~IndexExpression() {
-			if (leftExpression_ != 0)
-				delete leftExpression_;
-			if (rightExpression_ != 0)
-				delete rightExpression_;
-		}
-
-	private:
-		Expression* leftExpression_;
-		Expression* rightExpression_;
-		virtual bool IsLeftValue() {
-			return true;
-		}
-		virtual void Set(ScriptContext& ctx, Variant v) {
-			auto lft = leftExpression_->Eval(ctx);
-			auto rht = rightExpression_->Eval(ctx);
-			switch (lft.Type) {
-			case Variant::DataType::Object: {
-				const auto& typ = lft.Object->GetType();
-				if (typ == typeid(ScriptObject)) {
-					if (rht.Type != Variant::DataType::String)
-						throw std::exception("Right should be a string.");
-					std::string s = ((GCString*)rht.Object)->Pointer;
-					((ScriptObject*)lft.Object)->Set(s, v);
-					return;
-				}
-				if (typ == typeid(ScriptArray)) {
-					auto arr = (ScriptArray*)lft.Object;
-					auto ind = script_cast<long long>(rht);
-					if (ind < 0) {
-						ind += arr->Size();
-					}
-					if (ind < 0) {
-						throw std::exception("Bad backward index.");
-					}
-					arr->Set(ind, v);
-					return;
-				}
-				break;
-			}
-			default:
-				break;
-			}
-			throw std::exception("Invalid left val.");
-		}
-		Variant Eval(ScriptContext& ctx) override {
-			auto lft = leftExpression_->Eval(ctx);
-			auto rht = rightExpression_->Eval(ctx);
-			switch (lft.Type) {
-			case Variant::DataType::Object: {
-				const auto& typ = lft.Object->GetType();
-				if (typ == typeid(ScriptObject)) {
-					if (rht.Type != Variant::DataType::String)
-						throw std::exception("Right should be a string.");
-					std::string s = ((GCString*)rht.Object)->Pointer;
-					return ((ScriptObject*)lft.Object)->Get(s);
-				}
-				if (typ == typeid(ScriptArray)) {
-					auto arr = (ScriptArray*)lft.Object;
-					auto ind = script_cast<long long>(rht);
-					if (ind < 0) {
-						ind += arr->Size();
-					}
-					if (ind < 0) {
-						throw std::exception("Bad backward index.");
-					}
-					return arr->Get(ind);
-				}
-				break;
-			}
-			default:
-				break;
-			}
-			return {};
 		}
 	};
 	class TernaryExpression : public Expression {
@@ -880,6 +809,25 @@ namespace AST {
 			}
 			else {
 				return onFalse->Eval(ctx);
+			}
+		}
+		void Emit(ir::Emitter& em) override {
+			condition->Emit(em);
+			auto beg = em.Bytes.size();
+			// je [elseBranch]
+			em.EmitOp(ir::Opcode::OP_Jnz, 0);
+			onTrue->Emit(em);
+			auto el = em.Bytes.size();
+			if (onFalse != 0) {
+				// jmp end
+				em.EmitOp(ir::Opcode::OP_Jmp, 0);
+				onFalse->Emit(em);
+				auto ed = em.Bytes.size();
+				em.Modify(em.Bytes.begin() + el + 1, (int)(ed - el - 5));
+				em.Modify(em.Bytes.begin() + beg + 1, (int)(el - beg));
+			}
+			else {
+				em.Modify(em.Bytes.begin() + beg + 1, (int)(el - beg - 5));
 			}
 		}
 	};
@@ -919,12 +867,6 @@ namespace AST {
 			}
 		}
 	};
-	class PassExpression : public Expression {
-	public:
-		Variant Eval(ScriptContext& ctx) override {
-			return {};
-		}
-	};
 	class UnaryExpression : public Expression {
 	public:
 		UnaryExpression(Expression* left, UnOp op) : left(left), op(op) {
@@ -936,7 +878,12 @@ namespace AST {
 			if (left != 0)
 				delete left;
 		}
-
+		bool IsConst(ScriptContext& ctx) override {
+			if (op == AST::UnOp::Increase || op == AST::UnOp::Decrease) {
+				return false;
+			}
+			return left->IsConst(ctx);
+		}
 		// 通过 Expression 继承
 		Variant Eval(ScriptContext& ctx) override {
 			switch (op) {
@@ -1017,6 +964,18 @@ namespace AST {
 				em.EmitOp(ir::Opcode::OP_Dec);
 				left->EmitSet(em, 0);
 			} break;
+			case AST::UnOp::PostfixIncrease: {
+				em.EmitOp(ir::Opcode::OP_Dup);
+				em.EmitOp(ir::Opcode::OP_Inc);
+				left->EmitSet(em, 0);
+				em.EmitOp(ir::Opcode::OP_Pop);
+			} break;
+			case AST::UnOp::PostfixDecrease: {
+				em.EmitOp(ir::Opcode::OP_Dup);
+				em.EmitOp(ir::Opcode::OP_Dec);
+				left->EmitSet(em, 0);
+				em.EmitOp(ir::Opcode::OP_Pop);
+			} break;
 			default:
 				break;
 			}
@@ -1032,8 +991,6 @@ namespace AST {
 				exp->Emit(em);
 			}
 		}
-
-	private:
 		std::vector<Statement*> expressions;
 	};
 	class ReturnStatement : public Statement {
@@ -1041,9 +998,6 @@ namespace AST {
 		ReturnStatement(Expression* expression)
 			: expression_(expression) {}
 
-		Expression* getExpression() const {
-			return expression_;
-		}
 		void Emit(ir::Emitter& em) override {
 			if (expression_ != 0) {
 				expression_->Emit(em);
@@ -1053,8 +1007,6 @@ namespace AST {
 				em.EmitOp(ir::Opcode::OP_RetNull);
 			}
 		}
-
-	private:
 		Expression* expression_;
 	};
 	class BreakpointStatement : public Statement {
@@ -1068,17 +1020,6 @@ namespace AST {
 		IfStatement(Expression* condition, Statement* thenStatement, Statement* elseStatement)
 			: condition_(condition), thenStatement_(thenStatement), elseStatement_(elseStatement) {}
 
-		Expression* getCondition() const {
-			return condition_;
-		}
-
-		Statement* getThenStatement() const {
-			return thenStatement_;
-		}
-
-		Statement* getElseStatement() const {
-			return elseStatement_;
-		}
 		void Emit(ir::Emitter& em) override {
 			condition_->Emit(em);
 			auto beg = em.Bytes.size();
@@ -1098,8 +1039,6 @@ namespace AST {
 				em.Modify(em.Bytes.begin() + beg + 1, (int)(el - beg - 5));
 			}
 		}
-
-	private:
 		Expression* condition_;
 		Statement* thenStatement_;
 		Statement* elseStatement_;
@@ -1108,11 +1047,9 @@ namespace AST {
 	public:
 		WhileStatement(Expression* condition, Statement* bodyStatement)
 			: condition_(condition), Statements(bodyStatement) {}
-
-		Expression* getCondition() const {
-			return condition_;
+		bool IsConst(ScriptContext& ctx) override {
+			return condition_->IsConst(ctx) && Statements->IsConst(ctx);
 		}
-
 		void Emit(ir::Emitter& em) override {
 			auto beg = em.Bytes.size();
 			condition_->Emit(em);
@@ -1127,8 +1064,6 @@ namespace AST {
 			em.EvalLateBinds(end2, beg);
 			em.LateBinds = binds;
 		}
-
-	private:
 		Expression* condition_;
 		Statement* Statements;
 	};
@@ -1136,21 +1071,7 @@ namespace AST {
 	public:
 		ForStatement(Expression* startExpression, Expression* endExpression, Expression* stepExpression, Statement* bodyStatement)
 			: startExpression_(startExpression), endExpression_(endExpression), stepExpression_(stepExpression), bodyStatement_(bodyStatement) {}
-		Expression* getStartExpression() const {
-			return startExpression_;
-		}
 
-		Expression* getEndExpression() const {
-			return endExpression_;
-		}
-
-		Expression* getStepExpression() const {
-			return stepExpression_;
-		}
-
-		Statement* getBodyStatement() const {
-			return bodyStatement_;
-		}
 		void Emit(ir::Emitter& em) override {
 			startExpression_->Emit(em);
 			auto beg = em.Bytes.size();
@@ -1158,7 +1079,8 @@ namespace AST {
 			auto branch = em.Bytes.size();
 			em.EmitOp(ir::Opcode::OP_Jnz, 0);
 			auto binds = em.LateBinds;
-			bodyStatement_->Emit(em);
+			if (bodyStatement_ != 0)
+				bodyStatement_->Emit(em);
 			stepExpression_->Emit(em);
 			em.EmitOp(ir::Opcode::OP_Pop);
 			auto end = em.Bytes.size();
@@ -1169,7 +1091,6 @@ namespace AST {
 			em.LateBinds = binds;
 		}
 
-	private:
 		Expression* startExpression_;
 		Expression* endExpression_;
 		Expression* stepExpression_;
@@ -1179,16 +1100,10 @@ namespace AST {
 	public:
 		ThrowStatement(Expression* expression)
 			: expression_(expression) {}
-
-		Expression* getExpression() const {
-			return expression_;
-		}
 		void Emit(ir::Emitter& em) override {
 			expression_->Emit(em);
 			em.EmitOp(ir::Opcode::OP_Throw);
 		}
-
-	private:
 		Expression* expression_;
 	};
 	class BreakStatement : public Statement {
@@ -1209,25 +1124,41 @@ namespace AST {
 	public:
 		RangeForStatement(std::string var, Expression* rangeExpression, Statement* bodyStatement)
 			: varname(var), rangeExpression(rangeExpression), bodyStatement_(bodyStatement) {}
-
-		std::string getVariableName() const {
-			return varname;
-		}
-
-		Expression* getRangeExpression() const {
-			return rangeExpression;
-		}
-
-		Statement* getBodyStatement() const {
-			return bodyStatement_;
-		}
-
-	private:
 		std::string varname;
 		Expression* rangeExpression;
 		Statement* bodyStatement_;
 	};
+	class AssignmentStatement : public Statement {
+	public:
+		enum Scope {
+			Global,
+			Local,
+		} scope;
+		std::vector<std::pair<std::string, Expression*>> initials;
+		void Emit(ir::Emitter& em) override {
+			for (auto& [name, init] : initials) {
+				if (scope == Scope::Global) {
+					if (em.ctx != nullptr)
+						em.ctx->GlobalVars[name];
+					if (init != 0)
+						init->Emit(em);
+					else
+						em.EmitOp(ir::Opcode::OP_PushNull);
+					em.EmitOp(ir::Opcode::OP_StoreGlobalVar, name);
+				}
+				else {
+					if (init != 0)
+						init->Emit(em);
+					else
+						em.EmitOp(ir::Opcode::OP_PushNull);
+					em.EmitOpStoreVar(name);
+				}
+			}
+			em.EmitOpI1(ir::Opcode::OP_Popn, static_cast<unsigned char>(initials.size()));
+		}
+	};
 }
+
 class Parser {
 public:
 	Parser(std::vector<Lexer::Token> tokens) : tokens_(tokens), position_(0) {}
@@ -1238,13 +1169,13 @@ public:
 		while (position_ < tokens_.size()) {
 			AST::Statement* statement = parseStatement();
 			if (statement != nullptr) {
-				program->addStatement(statement);
+				program->statements_.push_back(statement);
 			}
 		}
 
 		return program;
 	}
-	size_t GetPos() {
+	size_t GetPos() const {
 		return position_;
 	}
 
@@ -1264,6 +1195,36 @@ private:
 		}
 		else if (match(Lexer::TokenType::Identifier, "debugbreak")) {
 			return new AST::BreakpointStatement();
+		}
+		else if (match(Lexer::TokenType::Identifier, "var")) {
+			auto res = new AST::AssignmentStatement();
+			res->scope = AST::AssignmentStatement::Scope::Global;
+			while (match(Lexer::TokenType::Identifier)) {
+				auto name = std::string(tokens_[position_ - 1].lexeme);
+				AST::Expression* expr = 0;
+				if (match(Lexer::TokenType::Operator, "=")) {
+					expr = parseExpression();
+				}
+				res->initials.push_back({ name, expr });
+				if (!match(Lexer::TokenType::Delimiter, ","))
+					break;
+			}
+			return res;
+		}
+		else if (match(Lexer::TokenType::Identifier, "let")) {
+			auto res = new AST::AssignmentStatement();
+			res->scope = AST::AssignmentStatement::Scope::Local;
+			while (match(Lexer::TokenType::Identifier)) {
+				auto name = std::string(tokens_[position_ - 1].lexeme);
+				AST::Expression* expr = 0;
+				if (match(Lexer::TokenType::Operator, "=")) {
+					expr = parseExpression();
+				}
+				res->initials.push_back({ name, expr });
+				if (!match(Lexer::TokenType::Delimiter, ","))
+					break;
+			}
+			return res;
 		}
 		else if (match(Lexer::TokenType::Identifier, "break")) {
 			return new AST::BreakStatement();
@@ -1291,27 +1252,32 @@ private:
 			}
 		}
 		else if (match(Lexer::TokenType::Identifier, "while")) {
+			auto openb = match(Lexer::TokenType::Delimiter, "(");
 			auto cond = parseExpression();
+			if (openb)
+				expect(Lexer::TokenType::Delimiter, ")");
 			if (cond != 0)
 				return new AST::WhileStatement(cond, parseStatement());
 		}
 		else if (match(Lexer::TokenType::Identifier, "for")) {
-			expect(Lexer::TokenType::Delimiter, "(");
+			auto openb = match(Lexer::TokenType::Delimiter, "(");
 			auto a = parseExpression();
-			expect(Lexer::TokenType::Delimiter, ";");
+			match(Lexer::TokenType::Delimiter, ";");
 			auto b = parseExpression();
-			expect(Lexer::TokenType::Delimiter, ";");
+			match(Lexer::TokenType::Delimiter, ";");
 			auto c = parseExpression();
-			expect(Lexer::TokenType::Delimiter, ")");
+			if (openb)
+				expect(Lexer::TokenType::Delimiter, ")");
 			return new AST::ForStatement(a, b, c, parseStatement());
 		}
 		else if (match(Lexer::TokenType::Identifier, "foreach")) {
-			expect(Lexer::TokenType::Delimiter, "(");
+			auto openb = match(Lexer::TokenType::Delimiter, "(");
 			auto var = tokens_[position_].lexeme;
 			position_++;
-			expect(Lexer::TokenType::Operator, ":");
+			match(Lexer::TokenType::Operator, ":");
 			auto c = parseExpression();
-			expect(Lexer::TokenType::Delimiter, ")");
+			if (openb)
+				expect(Lexer::TokenType::Delimiter, ")");
 			return new AST::RangeForStatement((std::string)var, c, parseStatement());
 		}
 		else if (match(Lexer::TokenType::Delimiter, "{")) {
@@ -1349,7 +1315,7 @@ private:
 		}
 		return condition;
 	}
-	AST::UnOp unopConvert(std::string_view sv) {
+	AST::UnOp prefixUnopConvert(std::string_view sv) {
 		if (sv == "+") {
 			return AST::UnOp::Positive;
 		}
@@ -1370,7 +1336,22 @@ private:
 		}
 		return AST::UnOp::Nop;
 	}
+	AST::UnOp postfixUnopConvert(std::string_view sv) {
+		if (sv == "++") {
+			return AST::UnOp::PostfixIncrease;
+		}
+		if (sv == "--") {
+			return AST::UnOp::PostfixDecrease;
+		}
+		return AST::UnOp::Nop;
+	}
 	AST::Expression* parsePrimaryExpression() {
+		AST::Expression* exp = 0;
+		auto op = prefixUnopConvert(tokens_[position_].lexeme);
+		if (op != AST::UnOp::Nop) {
+			position_++;
+			return new AST::UnaryExpression(parsePrimaryExpression(), op);
+		}
 		if (match(Lexer::TokenType::Identifier, "function")) {
 			expect(Lexer::TokenType::Delimiter, "(");
 			std::vector<std::string> parameters;
@@ -1393,23 +1374,25 @@ private:
 			}
 
 			// Assuming there is a constructor for `AST::LambdaExpression` that takes the parameters and statements
-			return new AST::LambdaExpression(parameters, statements);
+			exp = new AST::LambdaExpression(parameters, statements);
 		}
-		if (match(Lexer::TokenType::Identifier)) {
+		else if (match(Lexer::TokenType::Identifier)) {
 			std::string_view identifier = tokens_[position_ - 1].lexeme;
 			if (identifier == "var") {
 				position_++;
 				identifier = tokens_[position_ - 1].lexeme;
-				return new AST::GlobalVariantRefExpression(std::string(identifier));
+				exp = new AST::GlobalVariantRefExpression(std::string(identifier));
 			}
-			return new AST::VariantRefExpression(std::string(identifier));
+			else {
+				exp = new AST::VariantRefExpression(std::string(identifier));
+			}
 		}
 		else if (match(Lexer::TokenType::FloatLiteral)) {
 			double value = std::stod(tokens_[position_ - 1].lexeme.data());
 			Variant v{};
 			v.Type = Variant::DataType::Double;
 			v.Double = value;
-			return new AST::NumberExpression(v);
+			exp = new AST::NumberExpression(v);
 		}
 		else if (match(Lexer::TokenType::IntegerLiteral)) {
 			long long value = std::stoll(tokens_[position_ - 1].lexeme.data());
@@ -1422,26 +1405,33 @@ private:
 				v.Type = Variant::DataType::Long;
 				v.Long = value;
 			}
-			return new AST::NumberExpression(v);
+			exp = new AST::NumberExpression(v);
 		}
 		else if (match(Lexer::TokenType::StringLiteral)) {
 			std::string sv = (std::string)tokens_[position_ - 1].lexeme;
-			return new AST::StringExpression(sv);
+			exp = new AST::StringExpression(sv);
 		}
 		else if (match(Lexer::TokenType::Delimiter, "(")) {
-			auto pr = parseExpression();
+			exp = parseExpression();
 			expect(Lexer::TokenType::Delimiter, ")");
-			return pr;
+		}
+		else if (match(Lexer::TokenType::Delimiter, ";")) {
+			return nullptr;
 		}
 		else {
-			if (position_ >= tokens_.size())
-				throw std::exception("Reached EOF.");
-			auto op = unopConvert(tokens_[position_].lexeme);
-			if (op == AST::UnOp::Nop)
-				throw std::exception("Unable to parse.");
-			position_++;
-			return new AST::UnaryExpression{ parsePrimaryExpression(), op };
+			throw std::exception("bad input.");
 		}
+		while (position_ < tokens_.size()) {
+			op = postfixUnopConvert(tokens_[position_].lexeme);
+			if (op != AST::UnOp::Nop) {
+				position_++;
+				exp = new AST::UnaryExpression(exp, op);
+			}
+			else {
+				return exp;
+			}
+		}
+		throw std::exception("Unexpected EOF.");
 	}
 	int getOperatorPrecedence(AST::BinOp op) {
 		switch (op) {
@@ -1453,6 +1443,13 @@ private:
 			return 99;
 		case AST::BinOp::Index:
 		case AST::BinOp::Mov:
+		case AST::BinOp::AddMov:
+		case AST::BinOp::BandMov:
+		case AST::BinOp::BorMov:
+		case AST::BinOp::DivMov:
+		case AST::BinOp::MulMov:
+		case AST::BinOp::XorMov:
+		case AST::BinOp::SubMov:
 			return 5;
 		case AST::BinOp::Greater:
 		case AST::BinOp::Lesser:
@@ -1528,6 +1525,27 @@ private:
 		if (sv == "@") {
 			return AST::BinOp::Range;
 		}
+		if (sv == "+=") {
+			return AST::BinOp::AddMov;
+		}
+		if (sv == "-=") {
+			return AST::BinOp::SubMov;
+		}
+		if (sv == "*=") {
+			return AST::BinOp::MulMov;
+		}
+		if (sv == "/=") {
+			return AST::BinOp::DivMov;
+		}
+		if (sv == "&=") {
+			return AST::BinOp::BandMov;
+		}
+		if (sv == "|=") {
+			return AST::BinOp::BorMov;
+		}
+		if (sv == "^=") {
+			return AST::BinOp::XorMov;
+		}
 		return AST::BinOp::Nop;
 	}
 	AST::Expression* parseBinaryExpression(int precedence = 0) {
@@ -1552,7 +1570,7 @@ private:
 				}
 				auto index = parseExpression();
 				expect(Lexer::TokenType::Delimiter, "]");
-				left = new AST::IndexExpression{ left, index };
+				left = new AST::BinaryExpression{ left, AST::BinOp::Index, index };
 			}
 			else if (match(Lexer::TokenType::Operator, "=")) {
 				if (getOperatorPrecedence(AST::BinOp::Mov) <= precedence) {
